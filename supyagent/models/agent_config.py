@@ -1,0 +1,219 @@
+"""
+Agent configuration models.
+"""
+
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from pydantic import BaseModel, Field
+
+
+class ModelConfig(BaseModel):
+    """LLM model configuration."""
+
+    provider: str = Field(..., description="LiteLLM model identifier (e.g., 'anthropic/claude-3-5-sonnet-20241022')")
+    temperature: float = Field(default=0.7, ge=0, le=2)
+    max_tokens: int = Field(default=4096, gt=0)
+
+
+class ToolPermissions(BaseModel):
+    """Tool permission settings."""
+
+    allow: list[str] = Field(default_factory=list, description="Allowed tool patterns (e.g., 'web_search:*')")
+    deny: list[str] = Field(default_factory=list, description="Denied tool patterns")
+
+
+class CredentialSpec(BaseModel):
+    """Credential specification."""
+
+    name: str = Field(..., description="Environment variable name")
+    description: str = Field(default="", description="Description of what this credential is for")
+    required: bool = Field(default=False)
+
+
+class ContextSettings(BaseModel):
+    """Context window management settings."""
+
+    auto_summarize: bool = Field(
+        default=True,
+        description="Automatically summarize when trigger thresholds are reached"
+    )
+
+    # Summarization triggers (whichever comes first)
+    max_messages_before_summary: int = Field(
+        default=30,
+        description="Trigger summarization after N messages (since last summary)"
+    )
+    max_tokens_before_summary: int = Field(
+        default=128_000,
+        description="Trigger summarization when total tokens exceed K"
+    )
+
+    # Other settings
+    min_recent_messages: int = Field(
+        default=6,
+        description="Minimum recent messages to always include (never summarized)"
+    )
+    response_reserve: int = Field(
+        default=4096,
+        description="Tokens to reserve for response"
+    )
+
+
+class AgentConfig(BaseModel):
+    """
+    Agent configuration loaded from YAML.
+    """
+
+    name: str = Field(..., min_length=1, max_length=50)
+    description: str = Field(default="")
+    version: str = Field(default="1.0")
+    type: Literal["interactive", "execution"] = Field(default="interactive")
+    model: ModelConfig
+    system_prompt: str = Field(..., min_length=1)
+    tools: ToolPermissions = Field(default_factory=ToolPermissions)
+    delegates: list[str] = Field(default_factory=list)
+    credentials: list[CredentialSpec] = Field(default_factory=list)
+    limits: dict = Field(default_factory=dict)
+    will_create_tools: bool = Field(
+        default=False,
+        description="If true, agent will be instructed how to create new supypowers tools"
+    )
+    context: ContextSettings = Field(
+        default_factory=ContextSettings,
+        description="Context window management settings"
+    )
+
+
+# Instructions injected when will_create_tools is True
+TOOL_CREATION_INSTRUCTIONS = """
+
+---
+
+## Creating New Tools
+
+**If you need a capability that doesn't exist as a tool, you should create one.**
+
+You can create new tools using supypowers. Tools are Python functions that you can call.
+
+### How to Create a New Tool
+
+1. **Create a Python file** in the `supypowers/` directory (e.g., `supypowers/my_tool.py`)
+
+2. **Use this template:**
+
+```python
+# /// script
+# dependencies = ["pydantic"]  # Add any packages you need (httpx, beautifulsoup4, etc.)
+# ///
+from pydantic import BaseModel, Field
+
+class MyToolInput(BaseModel):
+    \"\"\"Input for my_tool function.\"\"\"
+    value: str = Field(..., description="Describe what this field is for")
+    optional_field: int = Field(default=10, description="Optional with default")
+
+class MyToolOutput(BaseModel):
+    \"\"\"Output for my_tool function.\"\"\"
+    ok: bool
+    result: str | None = None
+    error: str | None = None
+
+def my_tool(input: MyToolInput) -> MyToolOutput:
+    \"\"\"
+    Describe what this function does.
+    
+    Examples:
+        >>> my_tool({"value": "test"})
+    \"\"\"
+    try:
+        # Your implementation here
+        return MyToolOutput(ok=True, result=f"Processed: {input.value}")
+    except Exception as e:
+        return MyToolOutput(ok=False, error=str(e))
+```
+
+### Rules (Important!)
+
+1. **One parameter named `input`** — Function must be `def func(input: MyModel)`
+2. **Pydantic BaseModel** — Both input and output must be Pydantic models
+3. **No print()** — It breaks JSON output
+4. **Return errors, don't raise** — Use `ok: bool` pattern in output
+5. **Declare dependencies** — Add all packages to the `# /// script` block
+6. **Use environment variables for secrets** — Access via `os.environ.get("API_KEY")`
+
+### Common Patterns
+
+**HTTP requests:**
+```python
+# /// script
+# dependencies = ["pydantic", "httpx"]
+# ///
+import httpx
+
+def fetch_url(input: FetchInput) -> FetchOutput:
+    resp = httpx.get(input.url)
+    return FetchOutput(ok=True, status=resp.status_code, body=resp.text)
+```
+
+**Using secrets:**
+```python
+import os
+
+def call_api(input: ApiInput) -> ApiOutput:
+    api_key = os.environ.get("API_KEY")
+    if not api_key:
+        return ApiOutput(ok=False, error="API_KEY not set")
+    # Use api_key in your request
+```
+
+After creating the tool, it will be automatically available for use.
+"""
+
+
+def get_full_system_prompt(config: "AgentConfig") -> str:
+    """
+    Get the full system prompt, including tool creation instructions if enabled.
+    """
+    prompt = config.system_prompt
+    if config.will_create_tools:
+        prompt += TOOL_CREATION_INSTRUCTIONS
+    return prompt
+
+
+class AgentNotFoundError(Exception):
+    """Raised when an agent configuration is not found."""
+
+    def __init__(self, name: str):
+        self.name = name
+        super().__init__(f"Agent '{name}' not found. Check agents/ directory.")
+
+
+def load_agent_config(name: str, agents_dir: Path | None = None) -> AgentConfig:
+    """
+    Load and validate an agent configuration from YAML.
+
+    Args:
+        name: Agent name (without .yaml extension)
+        agents_dir: Directory containing agent YAML files (default: ./agents)
+
+    Returns:
+        Validated AgentConfig
+
+    Raises:
+        AgentNotFoundError: If agent YAML doesn't exist
+        ValidationError: If YAML is invalid
+    """
+    if agents_dir is None:
+        agents_dir = Path("agents")
+
+    config_path = agents_dir / f"{name}.yaml"
+
+    if not config_path.exists():
+        raise AgentNotFoundError(name)
+
+    with open(config_path) as f:
+        data = yaml.safe_load(f)
+
+    return AgentConfig(**data)

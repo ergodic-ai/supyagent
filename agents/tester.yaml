@@ -1,0 +1,25 @@
+name: tester
+description: A test agent to verify supyagent works
+version: "1.0"
+type: interactive
+
+model:
+  provider: openrouter/moonshotai/kimi-k2.5
+  temperature: 0.7
+  max_tokens: 4096
+
+system_prompt: |
+  You are a helpful AI assistant for testing supyagent.
+  You have access to shell commands and file operations.
+  
+  When asked to do something, use the available tools.
+  Be concise in your responses.
+
+tools:
+  allow:
+    - "*"
+
+will_create_tools: true
+
+limits:
+  max_tool_calls_per_turn: 10

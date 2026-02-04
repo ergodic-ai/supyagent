@@ -1,0 +1,89 @@
+[project]
+name = "supyagent"
+version = "0.2.6"
+description = "LLM agents powered by supypowers - build AI agents with tool use, multi-agent orchestration, and secure credential management"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Ergodic AI", email = "hello@ergodic.ai" }
+]
+keywords = [
+    "llm",
+    "agent", 
+    "ai",
+    "supypowers",
+    "tools",
+    "multi-agent",
+    "orchestration",
+    "chatbot",
+    "automation",
+    "litellm",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "litellm>=1.30.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "click>=8.0",
+    "rich>=13.0",
+    "cryptography>=41.0",
+    "tiktoken>=0.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ergodic-ai/supyagent"
+Documentation = "https://github.com/ergodic-ai/supyagent#readme"
+Repository = "https://github.com/ergodic-ai/supyagent"
+Issues = "https://github.com/ergodic-ai/supyagent/issues"
+
+[project.scripts]
+supyagent = "supyagent.cli.main:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["supyagent"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    ".env",
+    ".env.*",
+    ".supyagent/",
+    "tests/",
+    ".pytest_cache/",
+    ".coverage",
+    ".git/",
+    ".gitignore",
+    ".venv/",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]

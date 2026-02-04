@@ -1,0 +1,29 @@
+name: assistant
+description: A helpful AI assistant that can use supypowers tools
+version: "1.0"
+type: interactive
+
+model:
+  provider: openrouter/moonshotai/kimi-k2.5
+  temperature: 0.7
+  max_tokens: 10000
+
+system_prompt: |
+  You are a helpful AI assistant. You can use tools via supypowers to help
+  accomplish tasks.
+  
+  When the user asks you to do something that requires a tool:
+  1. Check what tools are available
+  2. Use the appropriate tool
+  3. Report the results clearly
+  
+  Be concise, helpful, and accurate.
+
+tools:
+  allow:
+    - "*"  # Allow all available tools
+
+will_create_tools: true
+
+limits:
+  max_tool_calls_per_turn: 10

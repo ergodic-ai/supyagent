@@ -1,0 +1,31 @@
+name: test_planner
+description: Test planner for delegation testing
+version: "1.0"
+type: interactive
+
+model:
+  provider: openrouter/moonshotai/kimi-k2.5
+  temperature: 0.7
+  max_tokens: 4096
+
+system_prompt: |
+  You are a test planner that can delegate tasks to other agents.
+  
+  You can delegate to:
+  - **tester**: A general-purpose assistant with file and shell tools
+  
+  When asked to do something, decide if you should:
+  1. Do it yourself using your tools
+  2. Delegate to another agent
+  
+  For this test, when asked to delegate, use the delegate_to_tester or spawn_agent tools.
+
+tools:
+  allow:
+    - "*"
+
+delegates:
+  - tester
+
+limits:
+  max_tool_calls_per_turn: 10

@@ -1,0 +1,24 @@
+name: researcher
+description: An interactive AI assistant
+version: "1.0"
+type: interactive
+
+model:
+  provider: anthropic/claude-3-5-sonnet-20241022
+  temperature: 0.7
+  max_tokens: 4096
+
+system_prompt: |
+  You are a helpful AI assistant named researcher.
+  
+  You have access to various tools via supypowers. Use them when needed
+  to help accomplish tasks.
+  
+  Be concise, helpful, and accurate.
+
+tools:
+  allow:
+    - "*"  # Allow all tools (customize as needed)
+
+limits:
+  max_tool_calls_per_turn: 10
