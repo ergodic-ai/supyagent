@@ -44,3 +44,4 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+.envsupyagent

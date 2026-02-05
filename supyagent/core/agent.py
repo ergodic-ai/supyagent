@@ -156,6 +156,11 @@ class Agent:
         if self.delegation_mgr:
             tools.extend(self.delegation_mgr.get_delegation_tools())
 
+        # Add process management tools (for managing background processes)
+        from supyagent.core.process_tools import get_process_management_tools
+
+        tools.extend(get_process_management_tools())
+
         return tools
 
     def _reconstruct_messages(self, session: Session) -> list[dict[str, Any]]:
@@ -541,6 +546,16 @@ class Agent:
         if self.delegation_mgr and self.delegation_mgr.is_delegation_tool(name):
             return self.delegation_mgr.execute_delegation(tool_call)
 
+        # Check if this is a process management tool
+        from supyagent.core.process_tools import is_process_tool, execute_process_tool
+
+        if is_process_tool(name):
+            try:
+                args = json.loads(tool_call.function.arguments)
+            except json.JSONDecodeError:
+                return {"ok": False, "error": "Invalid JSON arguments"}
+            return execute_process_tool(name, args)
+
         # Parse arguments
         arguments_str = tool_call.function.arguments
         try:
@@ -557,8 +572,40 @@ class Agent:
         # Get credentials for tool execution
         secrets = self.credential_manager.get_all_for_tools(self.config.name)
 
-        # Execute via supypowers
-        return execute_tool(script, func, args, secrets=secrets)
+        # Check supervisor settings for this tool
+        sup_settings = self.config.supervisor
+        timeout = sup_settings.default_timeout
+        use_supervisor = True  # Always use supervisor for timeout/background support
+
+        # Check if tool matches force_background or force_sync patterns
+        import fnmatch
+        force_background = any(
+            fnmatch.fnmatch(name, pattern) 
+            for pattern in sup_settings.force_background_patterns
+        )
+        force_sync = any(
+            fnmatch.fnmatch(name, pattern) 
+            for pattern in sup_settings.force_sync_patterns
+        )
+
+        # Per-tool settings override
+        for pattern, tool_settings in sup_settings.tool_settings.items():
+            if fnmatch.fnmatch(name, pattern):
+                timeout = tool_settings.timeout
+                if tool_settings.mode == "background":
+                    force_background = True
+                elif tool_settings.mode == "sync":
+                    force_sync = True
+                break
+
+        # Execute via supypowers with supervisor
+        return execute_tool(
+            script, func, args, 
+            secrets=secrets,
+            timeout=timeout if not force_sync else None,
+            background=force_background,
+            use_supervisor=use_supervisor and not force_sync,
+        )
 
     def get_available_tools(self) -> list[str]:
         """

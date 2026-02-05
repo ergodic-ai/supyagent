@@ -997,6 +997,114 @@ def run(
         sys.exit(1)
 
 
+@cli.command("exec")
+@click.argument("agent_name")
+@click.option("--task", "-t", required=True, help="Task for the agent to perform")
+@click.option("--context", "-c", default="{}", help="JSON context from parent agent")
+@click.option(
+    "--output",
+    "-o",
+    "output_fmt",
+    type=click.Choice(["json", "text"]),
+    default="json",
+)
+@click.option("--timeout", type=float, default=300, help="Max execution time in seconds")
+def exec_agent(
+    agent_name: str,
+    task: str,
+    context: str,
+    output_fmt: str,
+    timeout: float,
+):
+    """
+    Execute an agent as a subprocess (used internally for delegation).
+
+    This command is primarily used by the ProcessSupervisor when a parent
+    agent delegates to a child agent. It runs the agent and returns JSON output.
+
+    \b
+    Examples:
+        supyagent exec researcher --task "Find papers on AI"
+        supyagent exec summarizer --task "Summarize this text" --output json
+    """
+    # Load global config (API keys) into environment
+    load_config()
+
+    # Parse context
+    try:
+        context_dict = json.loads(context)
+    except json.JSONDecodeError:
+        if output_fmt == "json":
+            click.echo(json.dumps({"ok": False, "error": "Invalid context JSON"}))
+        else:
+            console_err.print("[red]Error:[/red] Invalid context JSON")
+        sys.exit(1)
+
+    # Load agent config
+    try:
+        config = load_agent_config(agent_name)
+    except AgentNotFoundError:
+        if output_fmt == "json":
+            click.echo(json.dumps({"ok": False, "error": f"Agent '{agent_name}' not found"}))
+        else:
+            console_err.print(f"[red]Error:[/red] Agent '{agent_name}' not found")
+        sys.exit(1)
+
+    # Build full task with context
+    full_task = _build_task_with_context(task, context_dict)
+
+    # Run the agent
+    try:
+        if config.type == "execution":
+            runner = ExecutionRunner(config)
+            result = runner.run(full_task, output_format="json")
+        else:
+            agent = Agent(config)
+            response = agent.send_message(full_task)
+            result = {"ok": True, "data": response}
+
+        if output_fmt == "json":
+            click.echo(json.dumps(result))
+        else:
+            if result.get("ok"):
+                click.echo(result.get("data", ""))
+            else:
+                console_err.print(f"[red]Error:[/red] {result.get('error', 'Unknown error')}")
+                sys.exit(1)
+
+    except Exception as e:
+        if output_fmt == "json":
+            click.echo(json.dumps({"ok": False, "error": str(e)}))
+        else:
+            console_err.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
+def _build_task_with_context(task: str, context: dict) -> str:
+    """Build task string with context from parent agent."""
+    parts = []
+
+    if context.get("parent_agent"):
+        parts.append(f"You are being called by the '{context['parent_agent']}' agent.")
+
+    if context.get("parent_task"):
+        parts.append(f"Parent's current task: {context['parent_task']}")
+
+    if context.get("conversation_summary"):
+        parts.append(f"\nConversation context:\n{context['conversation_summary']}")
+
+    if context.get("relevant_facts"):
+        parts.append("\nRelevant information:")
+        for fact in context["relevant_facts"]:
+            parts.append(f"- {fact}")
+
+    if parts:
+        parts.append(f"\n---\n\nYour task:\n{task}")
+        return "\n".join(parts)
+
+    return task
+
+
 @cli.command()
 @click.argument("agent_name")
 @click.argument("input_file", type=click.Path(exists=True))
@@ -1246,6 +1354,193 @@ def cleanup():
         console.print("[dim]No instances to clean up[/dim]")
     else:
         console.print(f"[green]✓[/green] Cleaned up {count} instance(s)")
+
+
+# =============================================================================
+# Process Management Commands
+# =============================================================================
+
+
+@cli.group()
+def process():
+    """Manage background processes (tools and agents)."""
+    pass
+
+
+@process.command("list")
+@click.option("--all", "-a", "include_all", is_flag=True, help="Include completed processes")
+def process_list(include_all: bool):
+    """List running background processes."""
+    from supyagent.core.supervisor import get_supervisor
+
+    supervisor = get_supervisor()
+    processes = supervisor.list_processes(include_completed=include_all)
+
+    if not processes:
+        console.print("[dim]No running processes[/dim]")
+        return
+
+    table = Table(title="Background Processes")
+    table.add_column("ID", style="cyan")
+    table.add_column("Type")
+    table.add_column("Status")
+    table.add_column("PID")
+    table.add_column("Started")
+
+    for proc in processes:
+        status = proc.get("status", "unknown")
+        status_style = {
+            "running": "green",
+            "backgrounded": "yellow",
+            "completed": "blue",
+            "failed": "red",
+            "killed": "red",
+        }.get(status, "white")
+
+        started = proc.get("started_at", "")
+        if started:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                started = dt.strftime("%H:%M:%S")
+            except (ValueError, AttributeError):
+                pass
+
+        table.add_row(
+            proc.get("process_id", "?"),
+            proc.get("process_type", "?"),
+            f"[{status_style}]{status}[/{status_style}]",
+            str(proc.get("pid", "-")),
+            started,
+        )
+
+    console.print(table)
+
+    # Show metadata for each process
+    for proc in processes:
+        meta = proc.get("metadata", {})
+        if meta:
+            proc_id = proc.get("process_id", "?")
+            if "agent_name" in meta:
+                console.print(f"  [dim]{proc_id}:[/dim] Agent: {meta['agent_name']}")
+            elif "script" in meta:
+                console.print(
+                    f"  [dim]{proc_id}:[/dim] Tool: {meta['script']}__{meta.get('func', '?')}"
+                )
+
+
+@process.command("show")
+@click.argument("process_id")
+def process_show(process_id: str):
+    """Show details of a specific process."""
+    from supyagent.core.supervisor import get_supervisor
+
+    supervisor = get_supervisor()
+    proc = supervisor.get_process(process_id)
+
+    if not proc:
+        console.print(f"[red]Process {process_id} not found[/red]")
+        return
+
+    console.print(f"\n[bold]Process ID:[/bold] {proc['process_id']}")
+    console.print(f"[bold]Type:[/bold] {proc['process_type']}")
+    console.print(f"[bold]Status:[/bold] {proc['status']}")
+    console.print(f"[bold]PID:[/bold] {proc.get('pid', 'N/A')}")
+    console.print(f"[bold]Started:[/bold] {proc.get('started_at', 'N/A')}")
+
+    if proc.get("completed_at"):
+        console.print(f"[bold]Completed:[/bold] {proc['completed_at']}")
+
+    if proc.get("exit_code") is not None:
+        console.print(f"[bold]Exit Code:[/bold] {proc['exit_code']}")
+
+    if proc.get("log_file"):
+        console.print(f"[bold]Log File:[/bold] {proc['log_file']}")
+
+    # Show command (truncated)
+    cmd = proc.get("cmd", [])
+    if cmd:
+        cmd_str = " ".join(cmd[:5])
+        if len(cmd) > 5:
+            cmd_str += " ..."
+        console.print(f"[bold]Command:[/bold] {cmd_str}")
+
+    # Show metadata
+    meta = proc.get("metadata", {})
+    if meta:
+        console.print(f"\n[bold]Metadata:[/bold]")
+        for key, value in meta.items():
+            if isinstance(value, str) and len(value) > 100:
+                value = value[:100] + "..."
+            console.print(f"  {key}: {value}")
+
+
+@process.command("output")
+@click.argument("process_id")
+@click.option("--tail", "-n", default=50, help="Number of lines to show")
+def process_output(process_id: str, tail: int):
+    """Show output from a background process."""
+    import asyncio
+    from supyagent.core.supervisor import get_supervisor
+
+    supervisor = get_supervisor()
+    result = asyncio.run(supervisor.get_output(process_id, tail=tail))
+
+    if result["ok"]:
+        data = result.get("data", {})
+        if isinstance(data, dict):
+            output = data.get("output", "") or data.get("stdout", "")
+            if output:
+                click.echo(output)
+            stderr = data.get("stderr", "")
+            if stderr:
+                console.print(f"\n[bold red]STDERR:[/bold red]")
+                click.echo(stderr)
+        else:
+            click.echo(data)
+    else:
+        console.print(f"[red]Error:[/red] {result.get('error', 'Unknown error')}")
+
+
+@process.command("kill")
+@click.argument("process_id")
+@click.option("--force", "-f", is_flag=True, help="Force kill without confirmation")
+def process_kill(process_id: str, force: bool):
+    """Kill a running background process."""
+    import asyncio
+    from supyagent.core.supervisor import get_supervisor
+
+    if not force:
+        if not click.confirm(f"Kill process {process_id}?"):
+            return
+
+    supervisor = get_supervisor()
+    result = asyncio.run(supervisor.kill(process_id))
+
+    if result["ok"]:
+        console.print(f"[green]✓[/green] Process {process_id} killed")
+    else:
+        console.print(f"[red]Error:[/red] {result.get('error', 'Unknown error')}")
+
+
+@process.command("cleanup")
+def process_cleanup():
+    """Remove completed/failed processes from tracking."""
+    import asyncio
+    from supyagent.core.supervisor import get_supervisor
+
+    supervisor = get_supervisor()
+    count = asyncio.run(supervisor._cleanup_completed())
+
+    if count == 0:
+        console.print("[dim]No completed processes to clean up[/dim]")
+    else:
+        console.print(f"[green]✓[/green] Cleaned up {count} process(es)")
+
+    # Also clean old log files
+    log_count = asyncio.run(supervisor.cleanup_old_logs())
+    if log_count > 0:
+        console.print(f"[green]✓[/green] Removed {log_count} old log file(s)")
 
 
 # =============================================================================

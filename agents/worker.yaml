@@ -1,0 +1,27 @@
+name: worker
+description: A simple execution agent that completes tasks and returns results
+version: "1.0"
+type: execution
+
+model:
+  provider: openrouter/google/gemini-3-flash-preview
+  temperature: 0.3
+  max_tokens: 2048
+
+system_prompt: |
+  You are a worker agent. You receive a task and produce a result.
+  
+  Rules:
+  - Complete the task directly
+  - Be concise in your output
+  - Do not engage in conversation - just produce the result
+  - If asked to compute something, show the answer
+  - If asked to generate text, write it directly
+
+tools:
+  allow:
+    - "shell:*"
+    - "files:*"
+
+limits:
+  max_tool_calls_per_turn: 5

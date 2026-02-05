@@ -261,10 +261,10 @@ class TestDelegationManager:
 
         result = manager.execute_delegation(mock_tool_call)
         assert result["ok"] is False
-        assert "not in delegates list" in result["error"]
+        assert "not in the delegates list" in result["error"]
 
     def test_delegate_to_execution_agent(self, parent_config, delegate_config, temp_dir):
-        """Test delegating to an execution agent."""
+        """Test delegating to an execution agent in-process mode."""
         registry = AgentRegistry(base_dir=temp_dir)
 
         mock_agent = MagicMock()
@@ -277,7 +277,8 @@ class TestDelegationManager:
 
             manager = DelegationManager(registry, mock_agent)
 
-            with patch("supyagent.core.delegation.ExecutionRunner") as mock_runner_class:
+            # ExecutionRunner is now imported inside the function, so patch the module
+            with patch("supyagent.core.executor.ExecutionRunner") as mock_runner_class:
                 mock_runner = MagicMock()
                 mock_runner.run.return_value = {"ok": True, "data": "Code written"}
                 mock_runner_class.return_value = mock_runner
@@ -286,6 +287,7 @@ class TestDelegationManager:
                 mock_tool_call.function.name = "delegate_to_coder"
                 mock_tool_call.function.arguments = json.dumps({
                     "task": "Write a Python function",
+                    "mode": "in_process",  # Use in_process mode to test the original code path
                 })
 
                 result = manager.execute_delegation(mock_tool_call)

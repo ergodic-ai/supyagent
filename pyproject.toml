@@ -45,10 +45,26 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+browser = [
+    "httpx>=0.25.0",
+    "markdownify>=0.12.0",
+    "beautifulsoup4>=4.12.0",
+    "playwright>=1.40.0",
+]
+web = [
+    "httpx>=0.25.0",
+    "markdownify>=0.12.0",
+    "beautifulsoup4>=4.12.0",
+]
 dev = [
     "pytest>=7.0",
+    "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.0",
     "ruff>=0.1.0",
+    "httpx>=0.25.0",
+    "markdownify>=0.12.0",
+    "beautifulsoup4>=4.12.0",
+    "playwright>=1.40.0",
 ]
 
 [project.urls]
@@ -79,6 +95,10 @@ exclude = [
     ".gitignore",
     ".venv/",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100

@@ -3,6 +3,10 @@ Delegation Manager for agent-to-agent task delegation.
 
 Enables agents to invoke other agents (delegates) to perform subtasks,
 supporting multi-agent orchestration patterns.
+
+Supports two execution modes:
+- subprocess: Child agents run in isolated processes (default, safer)
+- in_process: Child agents run in the same process (faster, shared memory)
 """
 
 from __future__ import annotations
@@ -11,7 +15,6 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from supyagent.core.context import DelegationContext, summarize_conversation
-from supyagent.core.executor import ExecutionRunner
 from supyagent.core.registry import AgentRegistry
 from supyagent.models.agent_config import AgentNotFoundError, load_agent_config
 
@@ -25,6 +28,8 @@ class DelegationManager:
 
     Provides tools that allow a parent agent to delegate tasks to
     child agents (delegates), with proper context passing.
+
+    Supports both subprocess (isolated) and in-process execution modes.
     """
 
     def __init__(
@@ -85,6 +90,28 @@ class DelegationManager:
                                     "to pass along"
                                 ),
                             },
+                            "mode": {
+                                "type": "string",
+                                "enum": ["subprocess", "in_process"],
+                                "default": "subprocess",
+                                "description": (
+                                    "Execution mode: 'subprocess' for isolation (default), "
+                                    "'in_process' for faster execution"
+                                ),
+                            },
+                            "background": {
+                                "type": "boolean",
+                                "default": False,
+                                "description": (
+                                    "If true, returns immediately without waiting. "
+                                    "Use for long-running tasks you don't need to wait for."
+                                ),
+                            },
+                            "timeout": {
+                                "type": "integer",
+                                "default": 300,
+                                "description": "Max seconds to wait before backgrounding (subprocess mode)",
+                            },
                         },
                         "required": ["task"],
                     },
@@ -113,6 +140,11 @@ class DelegationManager:
                             "task": {
                                 "type": "string",
                                 "description": "The task for the agent to perform",
+                            },
+                            "background": {
+                                "type": "boolean",
+                                "default": False,
+                                "description": "Run in background without waiting",
                             },
                         },
                         "required": ["agent_type", "task"],
@@ -147,9 +179,11 @@ class DelegationManager:
             return {"ok": False, "error": "Invalid JSON in tool arguments"}
 
         if name == "spawn_agent":
-            return self._spawn_agent(
+            return self._delegate_task(
                 args.get("agent_type", ""),
                 args.get("task", ""),
+                mode="subprocess",
+                background=args.get("background", False),
             )
 
         if name.startswith("delegate_to_"):
@@ -157,7 +191,10 @@ class DelegationManager:
             return self._delegate_task(
                 agent_name,
                 args.get("task", ""),
-                args.get("context"),
+                extra_context=args.get("context"),
+                mode=args.get("mode", "subprocess"),
+                background=args.get("background", False),
+                timeout=args.get("timeout", 300),
             )
 
         return {"ok": False, "error": f"Unknown delegation tool: {name}"}
@@ -168,13 +205,19 @@ class DelegationManager:
         extra_context: str | None = None,
     ) -> DelegationContext:
         """Build context to pass to a delegate."""
-        # Get conversation summary if we have messages
+        # Get conversation summary if we have enough messages to justify
+        # the extra LLM call. For short conversations (≤ 4 non-system messages),
+        # skip summarization to avoid adding unnecessary latency.
         summary = None
         if hasattr(self.parent, "messages") and self.parent.messages:
-            summary = summarize_conversation(
-                self.parent.messages,
-                self.parent.llm,
-            )
+            non_system = [
+                m for m in self.parent.messages if m.get("role") != "system"
+            ]
+            if len(non_system) > 4:
+                summary = summarize_conversation(
+                    self.parent.messages,
+                    self.parent.llm,
+                )
 
         context = DelegationContext(
             parent_agent=self.parent.config.name,
@@ -192,6 +235,9 @@ class DelegationManager:
         agent_name: str,
         task: str,
         extra_context: str | None = None,
+        mode: str = "subprocess",
+        background: bool = False,
+        timeout: float = 300,
     ) -> dict[str, Any]:
         """
         Delegate a task to another agent.
@@ -200,6 +246,9 @@ class DelegationManager:
             agent_name: Name of the agent to delegate to
             task: The task to perform
             extra_context: Optional additional context
+            mode: "subprocess" (isolated) or "in_process" (shared memory)
+            background: Return immediately without waiting (subprocess mode only)
+            timeout: Seconds before auto-backgrounding (subprocess mode)
 
         Returns:
             Result dict
@@ -217,10 +266,6 @@ class DelegationManager:
         except AgentNotFoundError:
             return {"ok": False, "error": f"Agent '{agent_name}' not found"}
 
-        # Build context
-        context = self._build_context(task, extra_context)
-        full_task = f"{context.to_prompt()}\n\n---\n\nYour task:\n{task}"
-
         # Check delegation depth
         parent_depth = self.registry.get_depth(self.parent_id)
         if parent_depth >= AgentRegistry.MAX_DEPTH:
@@ -232,13 +277,70 @@ class DelegationManager:
                 ),
             }
 
+        # Build context
+        context = self._build_context(task, extra_context)
+        full_task = f"{context.to_prompt()}\n\n---\n\nYour task:\n{task}"
+
+        if mode == "subprocess":
+            return self._delegate_subprocess(
+                agent_name, full_task, context, background, timeout
+            )
+        else:
+            return self._delegate_in_process(agent_name, config, full_task)
+
+    def _delegate_subprocess(
+        self,
+        agent_name: str,
+        full_task: str,
+        context: DelegationContext,
+        background: bool,
+        timeout: float,
+    ) -> dict[str, Any]:
+        """Delegate via subprocess using the ProcessSupervisor."""
+        from supyagent.core.supervisor import get_supervisor, run_supervisor_coroutine
+
+        cmd = [
+            "supyagent", "exec", agent_name,
+            "--task", full_task,
+            "--context", json.dumps({
+                "parent_agent": context.parent_agent,
+                "parent_task": context.parent_task,
+                "conversation_summary": context.conversation_summary,
+                "relevant_facts": context.relevant_facts,
+            }),
+            "--output", "json",
+        ]
+
+        supervisor = get_supervisor()
+
+        try:
+            return run_supervisor_coroutine(
+                supervisor.execute(
+                    cmd,
+                    process_type="agent",
+                    tool_name=f"agent__{agent_name}",
+                    timeout=timeout,
+                    force_background=background,
+                    metadata={"agent_name": agent_name, "task": full_task[:200]},
+                )
+            )
+        except Exception as e:
+            return {"ok": False, "error": f"Subprocess delegation failed: {e}"}
+
+    def _delegate_in_process(
+        self,
+        agent_name: str,
+        config,
+        full_task: str,
+    ) -> dict[str, Any]:
+        """Delegate in-process (original behavior)."""
         try:
             if config.type == "execution":
-                # Use execution runner for execution agents
+                from supyagent.core.executor import ExecutionRunner
+
                 runner = ExecutionRunner(config)
-                result = runner.run(full_task, output_format="json")
+                return runner.run(full_task, output_format="json")
             else:
-                # For interactive agents, create a new instance
                 from supyagent.core.agent import Agent
 
                 sub_agent = Agent(
@@ -248,13 +350,12 @@ class DelegationManager:
                 )
 
                 response = sub_agent.send_message(full_task)
-                result = {"ok": True, "data": response}
 
                 # Mark as completed
                 if sub_agent.instance_id:
                     self.registry.mark_completed(sub_agent.instance_id)
 
-            return result
+                return {"ok": True, "data": response}
 
         except Exception as e:
             return {"ok": False, "error": f"Delegation failed: {str(e)}"}

@@ -61,6 +61,68 @@ class ContextSettings(BaseModel):
     )
 
 
+class ToolExecutionSettings(BaseModel):
+    """Per-tool execution settings."""
+
+    timeout: float = Field(default=30, description="Seconds before auto-backgrounding")
+    mode: Literal["sync", "background", "auto"] = Field(
+        default="auto",
+        description="Execution mode: sync (wait), background (immediate return), auto (timeout-based)"
+    )
+
+
+class SupervisorSettings(BaseModel):
+    """Process supervisor settings for tool and agent execution."""
+
+    # Default timeout before auto-backgrounding (seconds)
+    default_timeout: float = Field(
+        default=30,
+        description="Default seconds to wait before auto-backgrounding a tool"
+    )
+
+    # Behavior when timeout is reached
+    on_timeout: Literal["background", "kill", "wait"] = Field(
+        default="background",
+        description="Action when timeout reached: background (keep running), kill (terminate), wait (block forever)"
+    )
+
+    # Max concurrent background processes
+    max_background_processes: int = Field(
+        default=10,
+        description="Maximum number of concurrent background processes"
+    )
+
+    # Patterns for tools that should always run in background
+    force_background_patterns: list[str] = Field(
+        default_factory=lambda: ["*__start_server*", "*__run_server*", "*__serve*"],
+        description="Glob patterns for tools that always run in background (e.g., servers)"
+    )
+
+    # Patterns for tools that should always run synchronously
+    force_sync_patterns: list[str] = Field(
+        default_factory=lambda: ["*__read_*", "*__list_*", "*__get_*"],
+        description="Glob patterns for tools that always wait for completion"
+    )
+
+    # Per-tool settings (overrides defaults)
+    tool_settings: dict[str, ToolExecutionSettings] = Field(
+        default_factory=dict,
+        description="Per-tool execution settings, keyed by tool name pattern"
+    )
+
+    # Default delegation execution mode
+    default_delegation_mode: Literal["subprocess", "in_process"] = Field(
+        default="subprocess",
+        description="Default mode for delegating to child agents"
+    )
+
+    # Delegation timeout
+    delegation_timeout: float = Field(
+        default=300,
+        description="Default timeout for delegated agent tasks (seconds)"
+    )
+
+
 class AgentConfig(BaseModel):
     """
     Agent configuration loaded from YAML.
@@ -83,6 +145,10 @@ class AgentConfig(BaseModel):
     context: ContextSettings = Field(
         default_factory=ContextSettings,
         description="Context window management settings"
+    )
+    supervisor: SupervisorSettings = Field(
+        default_factory=SupervisorSettings,
+        description="Process supervisor settings for tool and agent execution"
     )
 
 

@@ -74,13 +74,18 @@ class TestExecutionRunnerInit:
 
     @patch("supyagent.core.executor.discover_tools")
     def test_init_no_tools(self, mock_discover, execution_agent_config, temp_dir):
-        """Test initialization with no tools."""
+        """Test initialization with no supypowers tools (but process tools always present)."""
         mock_discover.return_value = []
 
         runner = ExecutionRunner(execution_agent_config)
 
         assert runner.config == execution_agent_config
-        assert runner.tools == []
+        # Process management tools are always included
+        tool_names = [t["function"]["name"] for t in runner.tools]
+        assert "list_processes" in tool_names
+        assert "check_process" in tool_names
+        assert "get_process_output" in tool_names
+        assert "kill_process" in tool_names
         mock_discover.assert_not_called()  # No tools allowed, so no discovery
 
     @patch("supyagent.core.executor.discover_tools")

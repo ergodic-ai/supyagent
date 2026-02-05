@@ -118,7 +118,10 @@ class TestAgentSendMessage:
             response = agent.send_message("Use a tool please")
 
         # Tool should have been executed (with empty secrets since none stored)
-        mock_execute_tool.assert_called_once_with("test", "hello", {"name": "World"}, secrets={})
+        mock_execute_tool.assert_called_once()
+        call_args = mock_execute_tool.call_args
+        assert call_args[0] == ("test", "hello", {"name": "World"})
+        assert call_args[1]["secrets"] == {}
 
         # Session should have: user, assistant (with tool call), tool_result, assistant (final)
         assert len(agent.session.messages) == 4
@@ -170,7 +173,10 @@ class TestAgentToolExecution:
 
         result = agent._execute_tool_call(tool_call)
 
-        mock_execute_tool.assert_called_once_with("script", "function", {"arg": "value"}, secrets={})
+        mock_execute_tool.assert_called_once()
+        call_args = mock_execute_tool.call_args
+        assert call_args[0] == ("script", "function", {"arg": "value"})
+        assert call_args[1]["secrets"] == {}
         assert result == {"ok": True, "data": "result"}
 
     @patch("supyagent.core.agent.discover_tools")

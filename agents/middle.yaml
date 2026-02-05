@@ -1,0 +1,29 @@
+name: middle
+description: An intermediary agent that delegates tasks to the worker
+version: "1.0"
+type: interactive
+
+model:
+  provider: openrouter/google/gemini-3-flash-preview
+  temperature: 0.5
+  max_tokens: 4096
+
+system_prompt: |
+  You are a middle-layer agent. When you receive a task, you MUST delegate it
+  to your worker agent using delegate_to_worker. Do NOT try to do the task yourself.
+  
+  Steps:
+  1. Receive the task from your parent
+  2. Delegate the actual work to the worker agent
+  3. Return the worker's result to your parent
+
+tools:
+  allow:
+    - "shell:*"
+    - "files:*"
+
+delegates:
+  - worker
+
+supervisor:
+  default_timeout: 30

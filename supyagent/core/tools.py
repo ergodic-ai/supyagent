@@ -2,8 +2,13 @@
 Supypowers tool integration.
 
 Discovers and executes tools from supypowers.
+
+Supports both synchronous (subprocess.run) and async (ProcessSupervisor) execution.
 """
 
+from __future__ import annotations
+
+import asyncio
 import json
 import subprocess
 from typing import Any
@@ -84,6 +89,9 @@ def execute_tool(
     func: str,
     args: dict[str, Any],
     secrets: dict[str, str] | None = None,
+    timeout: float | None = None,
+    background: bool = False,
+    use_supervisor: bool = False,
 ) -> dict[str, Any]:
     """
     Execute a supypowers function.
@@ -93,10 +101,20 @@ def execute_tool(
         func: Function name (e.g., 'search')
         args: Function arguments as a dict
         secrets: Optional secrets to pass as environment variables
+        timeout: Override default timeout (seconds)
+        background: Force background execution (returns immediately)
+        use_supervisor: Use ProcessSupervisor for execution (enables timeout/background)
 
     Returns:
         Result dict with 'ok' and 'data' or 'error'
     """
+    # If supervisor features requested, use async path
+    if use_supervisor or background or timeout is not None:
+        return _execute_tool_sync_via_supervisor(
+            script, func, args, secrets, timeout, background
+        )
+
+    # Original sync implementation for backwards compatibility
     cmd = ["supypowers", "run", f"{script}:{func}", json.dumps(args)]
 
     # Add secrets
@@ -125,6 +143,79 @@ def execute_tool(
         return {"ok": False, "error": f"Invalid JSON response: {e}"}
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "Tool execution timed out"}
+
+
+async def execute_tool_async(
+    script: str,
+    func: str,
+    args: dict[str, Any],
+    secrets: dict[str, str] | None = None,
+    timeout: float | None = None,
+    background: bool = False,
+) -> dict[str, Any]:
+    """
+    Execute a supypowers function asynchronously using the ProcessSupervisor.
+
+    Features:
+    - Non-blocking execution
+    - Automatic timeout handling with auto-backgrounding
+    - Process lifecycle management
+
+    Args:
+        script: Script name (e.g., 'web_search')
+        func: Function name (e.g., 'search')
+        args: Function arguments as a dict
+        secrets: Optional secrets to pass as environment variables
+        timeout: Override default timeout (seconds)
+        background: Force background execution (returns immediately)
+
+    Returns:
+        Result dict with 'ok' and 'data' or 'error'
+    """
+    from supyagent.core.supervisor import get_supervisor
+
+    tool_name = f"{script}__{func}"
+    cmd = ["supypowers", "run", f"{script}:{func}", json.dumps(args)]
+
+    # Add secrets to command
+    if secrets:
+        for key, value in secrets.items():
+            cmd.extend(["--secrets", f"{key}={value}"])
+
+    supervisor = get_supervisor()
+
+    return await supervisor.execute(
+        cmd,
+        process_type="tool",
+        tool_name=tool_name,
+        timeout=timeout,
+        force_background=background,
+        metadata={"script": script, "func": func, "args": args},
+    )
+
+
+def _execute_tool_sync_via_supervisor(
+    script: str,
+    func: str,
+    args: dict[str, Any],
+    secrets: dict[str, str] | None = None,
+    timeout: float | None = None,
+    background: bool = False,
+) -> dict[str, Any]:
+    """
+    Synchronous wrapper for supervisor-based tool execution.
+
+    Uses the supervisor's persistent event loop to avoid creating/destroying
+    loops and the associated 'Event loop is closed' errors.
+    """
+    from supyagent.core.supervisor import run_supervisor_coroutine
+
+    try:
+        return run_supervisor_coroutine(
+            execute_tool_async(script, func, args, secrets, timeout, background)
+        )
+    except Exception as e:
+        return {"ok": False, "error": f"Supervisor execution failed: {e}"}
 
 
 def _matches_pattern(name: str, pattern: str) -> bool:

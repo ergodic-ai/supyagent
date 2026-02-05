@@ -82,6 +82,110 @@ def read_file(input: ReadFileInput) -> ReadFileOutput:
 
 
 # =============================================================================
+# Read File Lines (specific line range)
+# =============================================================================
+
+
+class ReadFileLinesInput(BaseModel):
+    """Input for read_file_lines function."""
+
+    path: str = Field(description="Path to the file to read")
+    start_line: int = Field(
+        default=1, description="First line to read (1-based, inclusive)"
+    )
+    end_line: int = Field(
+        default=-1,
+        description="Last line to read (1-based, inclusive). -1 = end of file.",
+    )
+    encoding: str = Field(default="utf-8", description="File encoding")
+    include_line_numbers: bool = Field(
+        default=True,
+        description="Prefix each line with its line number",
+    )
+
+
+class ReadFileLinesOutput(BaseModel):
+    """Output for read_file_lines function."""
+
+    ok: bool
+    content: Optional[str] = None
+    start_line: int = 0
+    end_line: int = 0
+    total_lines: int = 0
+    path: Optional[str] = None
+    error: Optional[str] = None
+
+
+def read_file_lines(input: ReadFileLinesInput) -> ReadFileLinesOutput:
+    """
+    Read specific lines from a file.
+
+    Much more efficient than read_file for large files. Returns lines with
+    optional line numbers. Line numbers are 1-based and inclusive.
+
+    Examples:
+        >>> read_file_lines({"path": "main.py", "start_line": 1, "end_line": 50})
+        >>> read_file_lines({"path": "main.py", "start_line": 100, "end_line": 150})
+        >>> read_file_lines({"path": "big.log", "start_line": -1, "end_line": -1})  # last line
+    """
+    try:
+        path = os.path.expanduser(input.path)
+        p = Path(path)
+
+        if not p.exists():
+            return ReadFileLinesOutput(ok=False, error=f"File not found: {path}")
+
+        if not p.is_file():
+            return ReadFileLinesOutput(ok=False, error=f"Not a file: {path}")
+
+        all_lines = p.read_text(encoding=input.encoding).splitlines()
+        total_lines = len(all_lines)
+
+        # Handle negative indices (like Python: -1 = last line)
+        start = input.start_line
+        end = input.end_line
+
+        if start < 0:
+            start = max(1, total_lines + start + 1)
+        if end < 0:
+            end = total_lines
+
+        # Clamp
+        start = max(1, min(start, total_lines))
+        end = max(start, min(end, total_lines))
+
+        # Extract lines (1-based to 0-based)
+        selected = all_lines[start - 1 : end]
+
+        if input.include_line_numbers:
+            width = len(str(end))
+            lines_out = [
+                f"{str(start + i).rjust(width)}| {line}"
+                for i, line in enumerate(selected)
+            ]
+        else:
+            lines_out = selected
+
+        content = "\n".join(lines_out)
+
+        return ReadFileLinesOutput(
+            ok=True,
+            content=content,
+            start_line=start,
+            end_line=end,
+            total_lines=total_lines,
+            path=str(p.absolute()),
+        )
+
+    except UnicodeDecodeError:
+        return ReadFileLinesOutput(
+            ok=False, error=f"Cannot decode file as {input.encoding}"
+        )
+    except Exception as e:
+        return ReadFileLinesOutput(ok=False, error=str(e))
+
+
+# =============================================================================
 # Write File
 # =============================================================================
 
