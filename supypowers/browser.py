@@ -83,7 +83,20 @@ def _get_page():
     from playwright.sync_api import sync_playwright
 
     pw = sync_playwright().start()
-    _browser = pw.chromium.launch(headless=True)
+    try:
+        _browser = pw.chromium.launch(headless=True)
+    except Exception as e:
+        if "executable doesn't exist" in str(e).lower():
+            # Auto-install Chromium on first use
+            import subprocess
+            subprocess.run(
+                ["playwright", "install", "chromium"],
+                check=True,
+                capture_output=True,
+            )
+            _browser = pw.chromium.launch(headless=True)
+        else:
+            raise
     _context = _browser.new_context(
         viewport={"width": 1280, "height": 720},
         user_agent=(
