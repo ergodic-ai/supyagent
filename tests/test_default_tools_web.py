@@ -6,18 +6,15 @@ Uses httpx mocking to avoid real network calls.
 """
 
 import json
-from unittest.mock import patch, MagicMock
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from supyagent.default_tools.web import (
     FetchUrlInput,
     HttpRequestInput,
+    _html_to_markdown,
     fetch_url,
     http_request,
-    _html_to_markdown,
 )
-
 
 # =========================================================================
 # _html_to_markdown helper

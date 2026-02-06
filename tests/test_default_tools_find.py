@@ -4,9 +4,6 @@ Comprehensive tests for default_tools/find.py.
 Covers: find_files, recent_files, directory_tree
 """
 
-import os
-import time
-from pathlib import Path
 
 import pytest
 
@@ -14,9 +11,9 @@ from supyagent.default_tools.find import (
     FindFilesInput,
     RecentFilesInput,
     TreeInput,
+    directory_tree,
     find_files,
     recent_files,
-    directory_tree,
 )
 
 

@@ -4,7 +4,6 @@ Tests for context management functionality.
 
 import json
 import tempfile
-from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -21,7 +20,6 @@ from supyagent.core.tokens import (
 )
 from supyagent.models.agent_config import AgentConfig, ContextSettings
 from supyagent.models.context import ContextSummary
-
 
 # =============================================================================
 # Token Counting Tests
@@ -679,6 +677,7 @@ class TestCircuitBreaker:
     def test_circuit_breaker_trips(self, sample_agent_config):
         """Tool should be blocked after consecutive failures."""
         from unittest.mock import MagicMock
+
         from supyagent.core.engine import BaseAgentEngine
 
         # Create a concrete subclass for testing

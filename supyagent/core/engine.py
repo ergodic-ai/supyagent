@@ -22,12 +22,17 @@ from supyagent.core.tools import (
     filter_tools,
     supypowers_to_openai_tools,
 )
-from supyagent.models.agent_config import AgentConfig, get_full_system_prompt
-from supyagent.utils.media import detect_images_in_tool_result, make_image_content_part, make_text_content_part
+from supyagent.models.agent_config import AgentConfig
+from supyagent.utils.media import (
+    detect_images_in_tool_result,
+    make_image_content_part,
+    make_text_content_part,
+)
 
 if TYPE_CHECKING:
     from supyagent.core.delegation import DelegationManager
     from supyagent.core.registry import AgentRegistry
+    from supyagent.core.telemetry import TelemetryCollector
 
 
 class MaxIterationsError(Exception):
@@ -81,6 +86,9 @@ class BaseAgentEngine(ABC):
             from supyagent.core.service import get_service_client
 
             self._service_client = get_service_client()
+
+        # Telemetry
+        self.telemetry: "TelemetryCollector | None" = None
 
     def _setup_delegation(
         self,
@@ -136,6 +144,17 @@ class BaseAgentEngine(ABC):
 
         return tools
 
+    def reload_tools(self) -> int:
+        """
+        Reload tools from supypowers and service.
+
+        Useful for picking up new/changed tools without restarting.
+        Returns the new tool count.
+        """
+        self._service_tool_metadata.clear()
+        self.tools = self._load_base_tools()
+        return len(self.tools)
+
     def _build_messages_for_llm(self) -> list[dict[str, Any]]:
         """
         Get messages to send to LLM.
@@ -153,6 +172,8 @@ class BaseAgentEngine(ABC):
         Includes circuit breaker logic for repeated failures.
         Subclasses can override to add credential handling.
         """
+        import time as _time
+
         name = tool_call.function.name
 
         # Circuit breaker: block tools that have failed too many times
@@ -165,6 +186,9 @@ class BaseAgentEngine(ABC):
                 ),
                 "error_type": "circuit_breaker",
             }
+
+        start = _time.monotonic()
+        is_service = name in self._service_tool_metadata
 
         # 1. Delegation tools
         if self.delegation_mgr and self.delegation_mgr.is_delegation_tool(name):
@@ -180,18 +204,30 @@ class BaseAgentEngine(ABC):
                 self._tool_failure_counts[name] = self._tool_failure_counts.get(name, 0) + 1
                 return result
             result = execute_process_tool(name, args)
-        elif name in self._service_tool_metadata:
+        elif is_service:
             # 3. Service tools (HTTP routing to supyagent_service)
             result = self._execute_service_tool(tool_call)
         else:
             # 4. Supypowers tools (through supervisor)
             result = self._execute_supypowers_tool(tool_call)
 
+        elapsed_ms = (_time.monotonic() - start) * 1000
+
         # Track failures for circuit breaker
         if not result.get("ok", False):
             self._tool_failure_counts[name] = self._tool_failure_counts.get(name, 0) + 1
         else:
             self._tool_failure_counts[name] = 0  # Reset on success
+
+        # Track telemetry
+        if self.telemetry:
+            self.telemetry.track_tool_call(
+                tool_name=name,
+                duration_ms=elapsed_ms,
+                ok=result.get("ok", False),
+                error=result.get("error") if not result.get("ok") else None,
+                is_service=is_service,
+            )
 
         return result
 

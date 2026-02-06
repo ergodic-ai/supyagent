@@ -10,19 +10,15 @@ Tests that multimodal content (images + text) flows correctly through:
 
 import base64
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from supyagent.core.context_manager import ContextManager
 from supyagent.core.session_manager import SessionManager
 from supyagent.core.tokens import count_message_tokens, count_messages_tokens
-from supyagent.models.session import Message, Session, SessionMeta
+from supyagent.models.session import Message
 from supyagent.utils.media import (
-    Content,
     content_to_storable,
-    encode_image_to_base64,
     make_image_content_part,
     make_text_content_part,
     resolve_media_refs,

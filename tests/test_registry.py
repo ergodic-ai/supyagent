@@ -2,8 +2,7 @@
 Tests for AgentRegistry.
 """
 
-import json
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest

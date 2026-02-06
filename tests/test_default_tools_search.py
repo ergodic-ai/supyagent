@@ -4,16 +4,14 @@ Comprehensive tests for default_tools/search.py.
 Covers: search, count_matches
 """
 
-import os
-from pathlib import Path
 
 import pytest
 
 from supyagent.default_tools.search import (
-    SearchInput,
     CountMatchesInput,
-    search,
+    SearchInput,
     count_matches,
+    search,
 )
 
 

@@ -160,6 +160,27 @@ class SupervisorSettings(BaseModel):
         return timeout, force_background, force_sync
 
 
+class DelegationConfig(BaseModel):
+    """Configuration for how this agent delegates to others."""
+
+    share_credentials: bool = Field(
+        default=True,
+        description="Share stored credentials with delegated agents"
+    )
+    share_summary: bool = Field(
+        default=True,
+        description="Pass conversation summary to delegated agents"
+    )
+    default_mode: Literal["subprocess", "in_process"] = Field(
+        default="subprocess",
+        description="Default execution mode for delegated agents"
+    )
+    default_timeout: int = Field(
+        default=300,
+        description="Default timeout in seconds for delegated agents"
+    )
+
+
 class ServiceConfig(BaseModel):
     """Service integration configuration."""
 
@@ -199,6 +220,10 @@ class AgentConfig(BaseModel):
     supervisor: SupervisorSettings = Field(
         default_factory=SupervisorSettings,
         description="Process supervisor settings for tool and agent execution"
+    )
+    delegation: DelegationConfig = Field(
+        default_factory=DelegationConfig,
+        description="Settings for agent-to-agent delegation"
     )
     service: ServiceConfig = Field(
         default_factory=ServiceConfig,
@@ -399,7 +424,7 @@ def validate_agent_config(
     # Check tool patterns are valid
     for pattern in config.tools.allow + config.tools.deny:
         if not pattern or not isinstance(pattern, str):
-            issues.append(f"tools: empty or invalid pattern found in allow/deny list")
+            issues.append("tools: empty or invalid pattern found in allow/deny list")
 
     return issues
 

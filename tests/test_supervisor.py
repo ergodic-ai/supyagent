@@ -1,13 +1,10 @@
 """Tests for ProcessSupervisor."""
 
-import asyncio
 import pytest
-from pathlib import Path
 
 from supyagent.core.supervisor import (
     ProcessSupervisor,
     SupervisorConfig,
-    ProcessStatus,
     TimeoutAction,
     get_supervisor,
     reset_supervisor,

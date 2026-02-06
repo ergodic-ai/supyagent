@@ -4,8 +4,6 @@ Tests for the Agent class.
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from supyagent.core.agent import Agent
 from supyagent.core.session_manager import SessionManager
 from supyagent.models.session import Message, Session, SessionMeta

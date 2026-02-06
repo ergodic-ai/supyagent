@@ -1,12 +1,10 @@
 """Unit tests for supyagent.utils.media."""
 
 import base64
-from pathlib import Path
 
 import pytest
 
 from supyagent.utils.media import (
-    Content,
     content_to_storable,
     content_to_text,
     detect_images_in_tool_result,

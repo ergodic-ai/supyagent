@@ -14,7 +14,6 @@ from pathlib import Path
 from cryptography.fernet import Fernet, InvalidToken
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Confirm
 from rich.table import Table
 
 console = Console()
@@ -215,7 +214,7 @@ class ConfigManager:
                 console.print(f"      [dim]{desc}[/dim]")
 
             console.print()
-            console.print(f"  [0] Enter custom key name")
+            console.print("  [0] Enter custom key name")
             console.print()
 
             choice = input("Select key to set (number or name): ").strip()

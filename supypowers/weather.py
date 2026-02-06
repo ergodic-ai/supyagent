@@ -4,6 +4,7 @@
 import httpx
 from pydantic import BaseModel, Field
 
+
 class WeatherInput(BaseModel):
     """Input for weather forecast."""
     location: str = Field(..., description="City name or location")
@@ -28,15 +29,15 @@ def get_weather(input: WeatherInput) -> WeatherOutput:
         geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={input.location}&count=1&language=en&format=json"
         geo_resp = httpx.get(geo_url, timeout=30)
         geo_data = geo_resp.json()
-        
+
         if "results" not in geo_data or not geo_data["results"]:
             return WeatherOutput(ok=False, error=f"Location '{input.location}' not found")
-        
+
         result = geo_data["results"][0]
         lat = result["latitude"]
         lon = result["longitude"]
         location_name = f"{result['name']}, {result.get('country', '')}"
-        
+
         # Get weather forecast
         weather_url = (
             f"https://api.open-meteo.com/v1/forecast?"
@@ -45,14 +46,14 @@ def get_weather(input: WeatherInput) -> WeatherOutput:
         )
         weather_resp = httpx.get(weather_url, timeout=30)
         weather_data = weather_resp.json()
-        
+
         daily = weather_data.get("daily", {})
         dates = daily.get("time", [])
         max_temps = daily.get("temperature_2m_max", [])
         min_temps = daily.get("temperature_2m_min", [])
         precip_probs = daily.get("precipitation_probability_mean", [])
         weather_codes = daily.get("weather_code", [])
-        
+
         # Weather code mapping (WMO codes)
         weather_descriptions = {
             0: "Clear sky",
@@ -64,7 +65,7 @@ def get_weather(input: WeatherInput) -> WeatherOutput:
             80: "Rain showers", 81: "Moderate showers", 82: "Violent showers",
             95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Heavy thunderstorm with hail"
         }
-        
+
         forecast = []
         for i in range(len(dates)):
             code = weather_codes[i] if i < len(weather_codes) else 0
@@ -75,8 +76,8 @@ def get_weather(input: WeatherInput) -> WeatherOutput:
                 "precipitation_chance": precip_probs[i] if i < len(precip_probs) else None,
                 "condition": weather_descriptions.get(code, f"Code {code}")
             })
-        
+
         return WeatherOutput(ok=True, location=location_name, forecast=forecast)
-        
+
     except Exception as e:
         return WeatherOutput(ok=False, error=str(e))

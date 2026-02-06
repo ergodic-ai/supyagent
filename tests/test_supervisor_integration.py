@@ -10,21 +10,19 @@ import time
 
 import pytest
 
+from supyagent.core.process_tools import (
+    execute_process_tool,
+    execute_process_tool_async,
+    is_process_tool,
+)
 from supyagent.core.supervisor import (
     ProcessSupervisor,
-    ProcessStatus,
     SupervisorConfig,
     TimeoutAction,
     get_supervisor,
     reset_supervisor,
     run_supervisor_coroutine,
 )
-from supyagent.core.process_tools import (
-    execute_process_tool,
-    execute_process_tool_async,
-    is_process_tool,
-)
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -261,7 +259,6 @@ class TestKillEdgeCases:
     async def test_kill_actually_terminates_os_process(self, supervisor):
         """Verify the underlying OS process is truly dead after kill."""
         import os
-        import signal
 
         pid = await _start_bg_process(supervisor)
         info = supervisor.get_process(pid)

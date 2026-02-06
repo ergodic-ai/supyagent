@@ -4,23 +4,21 @@ Comprehensive tests for default_tools/edit.py.
 Covers: edit_replace, insert_lines, replace_lines, multi_edit, regex_replace
 """
 
-import os
-from pathlib import Path
 
 import pytest
 
 from supyagent.default_tools.edit import (
     EditReplaceInput,
     InsertLinesInput,
-    ReplaceLinesInput,
     MultiEditInput,
-    SingleEdit,
     RegexReplaceInput,
+    ReplaceLinesInput,
+    SingleEdit,
     edit_replace,
     insert_lines,
-    replace_lines,
     multi_edit,
     regex_replace,
+    replace_lines,
 )
 
 

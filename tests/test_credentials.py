@@ -2,12 +2,8 @@
 Tests for credential management.
 """
 
-import json
 import os
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from supyagent.core.credentials import CredentialManager
 

@@ -12,16 +12,13 @@ IMPORTANT: Requires Playwright browsers to be installed:
     playwright install chromium
 """
 
-import json
 import os
-import time
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import List, Optional
 
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 from pydantic import BaseModel, Field
-
 
 # Tags to remove from HTML before converting to markdown
 _REMOVE_TAGS = [

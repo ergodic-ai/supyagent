@@ -2,7 +2,6 @@
 
 import base64
 import importlib
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 

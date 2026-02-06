@@ -11,10 +11,9 @@ including file paths, line numbers, and surrounding context.
 import os
 import re
 from pathlib import Path
-from typing import Optional, List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
-
 
 # =============================================================================
 # Grep / Search in files

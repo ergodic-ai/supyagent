@@ -15,20 +15,18 @@ import asyncio
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from supyagent.core.context import DelegationContext, summarize_conversation
+from supyagent.core.context import DelegationContext
 from supyagent.core.delegation import DelegationManager
 from supyagent.core.registry import AgentRegistry
 from supyagent.core.supervisor import (
     ProcessSupervisor,
-    ProcessStatus,
     SupervisorConfig,
     TimeoutAction,
     reset_supervisor,
-    run_supervisor_coroutine,
 )
 from supyagent.models.agent_config import (
     AgentConfig,
@@ -37,7 +35,6 @@ from supyagent.models.agent_config import (
     SupervisorSettings,
     ToolPermissions,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

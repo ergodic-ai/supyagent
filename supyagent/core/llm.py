@@ -10,6 +10,8 @@ import litellm
 from litellm import completion
 from litellm.exceptions import (
     APIConnectionError,
+    AuthenticationError,
+    NotFoundError,
     RateLimitError,
     ServiceUnavailableError,
 )
@@ -19,6 +21,75 @@ from litellm.types.utils import ModelResponse
 litellm.suppress_debug_info = True
 
 logger = logging.getLogger(__name__)
+
+
+# Map of provider prefixes to their expected API key env vars
+_PROVIDER_KEY_HINTS: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "gemini": "GOOGLE_API_KEY",
+    "azure": "AZURE_API_KEY",
+    "cohere": "COHERE_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "together": "TOGETHER_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+}
+
+
+class LLMError(Exception):
+    """User-friendly LLM error with actionable guidance."""
+
+    def __init__(self, message: str, original: Exception | None = None):
+        self.original = original
+        super().__init__(message)
+
+
+def _friendly_llm_error(model: str, error: Exception) -> LLMError:
+    """Convert a LiteLLM exception to a user-friendly error message."""
+    provider = model.split("/")[0].lower() if "/" in model else model.split("/")[0].lower()
+
+    if isinstance(error, AuthenticationError):
+        key_name = _PROVIDER_KEY_HINTS.get(provider, f"{provider.upper()}_API_KEY")
+        return LLMError(
+            f"Authentication failed for '{model}'. "
+            f"Check that {key_name} is set correctly.\n"
+            f"  Run: supyagent config set {key_name}",
+            original=error,
+        )
+
+    if isinstance(error, NotFoundError):
+        return LLMError(
+            f"Model '{model}' not found. Check the model name and provider.\n"
+            f"  LiteLLM format: provider/model (e.g., openai/gpt-4o, anthropic/claude-3-5-sonnet-20241022)\n"
+            f"  See: https://docs.litellm.ai/docs/providers",
+            original=error,
+        )
+
+    if isinstance(error, RateLimitError):
+        return LLMError(
+            f"Rate limit exceeded for '{model}'. Wait a moment and try again.\n"
+            f"  If this persists, check your API plan limits.",
+            original=error,
+        )
+
+    if isinstance(error, APIConnectionError):
+        return LLMError(
+            f"Cannot connect to {provider} API. Check your internet connection.\n"
+            f"  If using a custom endpoint, verify the URL is correct.",
+            original=error,
+        )
+
+    if isinstance(error, ServiceUnavailableError):
+        return LLMError(
+            f"The {provider} API is temporarily unavailable. Try again in a moment.",
+            original=error,
+        )
+
+    # Generic fallback
+    return LLMError(f"LLM error ({type(error).__name__}): {error}", original=error)
 
 
 class LLMClient:
@@ -107,7 +178,10 @@ class LLMClient:
                     time.sleep(delay)
                     delay *= self.retry_backoff
                 else:
-                    raise
+                    raise _friendly_llm_error(self.model, e) from e
+            except (AuthenticationError, NotFoundError) as e:
+                # Non-transient errors: don't retry, raise friendly error immediately
+                raise _friendly_llm_error(self.model, e) from e
 
         raise last_error  # Should not reach here
 

@@ -5,22 +5,17 @@ Covers: run_command, run_script, which, get_env
 """
 
 import os
-import tempfile
-from pathlib import Path
-
-import pytest
 
 from supyagent.default_tools.shell import (
+    GetEnvInput,
     RunCommandInput,
     RunScriptInput,
     WhichInput,
-    GetEnvInput,
+    get_env,
     run_command,
     run_script,
     which,
-    get_env,
 )
-
 
 # =========================================================================
 # run_command

@@ -2,14 +2,10 @@
 Tests for Phase 4: Tool Unification — service tools merged into agent discovery and dispatch.
 """
 
-import json
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from supyagent.core.tools import _matches_pattern, filter_tools
 from supyagent.models.agent_config import AgentConfig, ModelConfig, ServiceConfig, ToolPermissions
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

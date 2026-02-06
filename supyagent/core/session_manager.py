@@ -56,6 +56,60 @@ class SessionManager:
         """Get the path to the current session pointer file."""
         return self._agent_dir(agent) / "current.json"
 
+    def _aliases_path(self, agent: str) -> Path:
+        """Get the path to session aliases file."""
+        return self._agent_dir(agent) / "aliases.json"
+
+    def _load_aliases(self, agent: str) -> dict[str, str]:
+        """Load session aliases (name → session_id)."""
+        path = self._aliases_path(agent)
+        if not path.exists():
+            return {}
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _save_aliases(self, agent: str, aliases: dict[str, str]) -> None:
+        """Save session aliases."""
+        with open(self._aliases_path(agent), "w") as f:
+            json.dump(aliases, f, indent=2)
+
+    def set_alias(self, agent: str, alias: str, session_id: str) -> None:
+        """Set a named alias for a session."""
+        aliases = self._load_aliases(agent)
+        aliases[alias] = session_id
+        self._save_aliases(agent, aliases)
+
+    def remove_alias(self, agent: str, alias: str) -> bool:
+        """Remove a session alias. Returns True if it existed."""
+        aliases = self._load_aliases(agent)
+        if alias in aliases:
+            del aliases[alias]
+            self._save_aliases(agent, aliases)
+            return True
+        return False
+
+    def resolve_alias(self, agent: str, name_or_id: str) -> str | None:
+        """
+        Resolve a name or ID to a session ID.
+
+        Checks aliases first, then tries as a direct session ID / prefix.
+        """
+        aliases = self._load_aliases(agent)
+        if name_or_id in aliases:
+            return aliases[name_or_id]
+        return None
+
+    def get_alias(self, agent: str, session_id: str) -> str | None:
+        """Get the alias for a session ID, if any."""
+        aliases = self._load_aliases(agent)
+        for alias, sid in aliases.items():
+            if sid == session_id:
+                return alias
+        return None
+
     def create_session(self, agent: str, model: str) -> Session:
         """
         Create a new session for an agent.
@@ -311,6 +365,86 @@ class SessionManager:
             results.append(s)
 
         return results
+
+    def export_session(
+        self,
+        agent: str,
+        session_id: str,
+        fmt: str = "markdown",
+    ) -> str | None:
+        """
+        Export a session to a string in the specified format.
+
+        Args:
+            agent: Agent name
+            session_id: Session ID to export
+            fmt: Export format ('markdown' or 'json')
+
+        Returns:
+            Formatted string, or None if session not found
+        """
+        session = self.load_session(agent, session_id)
+        if not session:
+            return None
+
+        if fmt == "json":
+            data = {
+                "session_id": session.meta.session_id,
+                "agent": session.meta.agent,
+                "model": session.meta.model,
+                "title": session.meta.title,
+                "created_at": session.meta.created_at.isoformat(),
+                "updated_at": session.meta.updated_at.isoformat(),
+                "messages": [],
+            }
+            for msg in session.messages:
+                entry: dict[str, Any] = {
+                    "type": msg.type,
+                    "ts": msg.ts.isoformat(),
+                }
+                if msg.content:
+                    entry["content"] = msg.content
+                if msg.name:
+                    entry["tool"] = msg.name
+                data["messages"].append(entry)
+            return json.dumps(data, indent=2)
+
+        # Default: markdown
+        alias = self.get_alias(agent, session_id)
+        title_line = session.meta.title or "Untitled conversation"
+        if alias:
+            title_line += f" ({alias})"
+
+        lines = [
+            f"# {title_line}",
+            "",
+            f"**Agent:** {session.meta.agent}  ",
+            f"**Model:** {session.meta.model}  ",
+            f"**Session:** {session.meta.session_id}  ",
+            f"**Created:** {session.meta.created_at.strftime('%Y-%m-%d %H:%M')}  ",
+            f"**Updated:** {session.meta.updated_at.strftime('%Y-%m-%d %H:%M')}",
+            "",
+            "---",
+            "",
+        ]
+
+        for msg in session.messages:
+            content_text = msg.content
+            if isinstance(content_text, list):
+                content_text = content_to_text(content_text)
+
+            if msg.type == "user":
+                lines.append(f"**You:** {content_text}\n")
+            elif msg.type == "assistant":
+                lines.append(f"**{agent}:** {content_text}\n")
+            elif msg.type == "tool_result":
+                tool_name = msg.name or "unknown"
+                preview = (content_text or "")[:200]
+                if len(content_text or "") > 200:
+                    preview += "..."
+                lines.append(f"> *Tool: {tool_name}*  \n> {preview}\n")
+
+        return "\n".join(lines)
 
     def delete_all_sessions(self, agent: str) -> int:
         """

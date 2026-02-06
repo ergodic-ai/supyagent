@@ -305,13 +305,19 @@ class ContextManager:
         # Build summarization prompt
         conversation_text = self._format_messages_for_summary(messages_to_summarize)
 
-        summary_prompt = f"""Summarize this conversation concisely. Focus on:
-1. Key topics discussed
-2. Important decisions or conclusions
-3. Any tasks completed or pending
-4. Relevant context for continuing the conversation
+        summary_prompt = f"""Summarize this conversation concisely. Preserve the following:
 
-Keep the summary under 500 words.
+1. Key topics discussed and decisions made
+2. Important tool results that were referenced later (data values, IDs, URLs, file paths)
+3. Any credentials, API keys, or configuration established during the conversation
+4. Tasks completed and tasks still pending
+5. Working context needed to continue (e.g., current file being edited, active project)
+
+Rules:
+- Keep concrete values (IDs, names, paths) rather than vague descriptions
+- If a tool returned data that the user or assistant referenced, keep that data
+- Omit tool results that were acknowledged but not reused
+- Keep the summary under 500 words
 
 Conversation:
 {conversation_text}
@@ -332,13 +338,19 @@ Summary:"""
                 conversation_text[:max_chars]
                 + "\n... [truncated for summarization]"
             )
-            summary_prompt = f"""Summarize this conversation concisely. Focus on:
-1. Key topics discussed
-2. Important decisions or conclusions
-3. Any tasks completed or pending
-4. Relevant context for continuing the conversation
+            summary_prompt = f"""Summarize this conversation concisely. Preserve the following:
 
-Keep the summary under 500 words.
+1. Key topics discussed and decisions made
+2. Important tool results that were referenced later (data values, IDs, URLs, file paths)
+3. Any credentials, API keys, or configuration established during the conversation
+4. Tasks completed and tasks still pending
+5. Working context needed to continue (e.g., current file being edited, active project)
+
+Rules:
+- Keep concrete values (IDs, names, paths) rather than vague descriptions
+- If a tool returned data that the user or assistant referenced, keep that data
+- Omit tool results that were acknowledged but not reused
+- Keep the summary under 500 words
 
 Conversation:
 {conversation_text}
@@ -376,11 +388,29 @@ Summary:"""
                 content = content_to_text(content)
 
             if role == "TOOL":
-                # Truncate tool results
-                content = content[:500] + "..." if len(content) > 500 else content
+                # Keep more of tool results that look like they contain useful data
+                # (JSON with ok/data structure, short outputs, credential-like values)
+                max_len = 500
+                if content:
+                    try:
+                        parsed = json.loads(content) if isinstance(content, str) else content
+                        if isinstance(parsed, dict) and parsed.get("ok") and parsed.get("data"):
+                            # Successful tool result — keep more context
+                            max_len = 1000
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                content = content[:max_len] + "..." if len(content) > max_len else content
                 lines.append(f"[Tool Result]: {content}")
             elif role == "ASSISTANT" and msg.get("tool_calls"):
-                tools = [tc.get("function", {}).get("name", "?") for tc in msg["tool_calls"]]
+                tools = []
+                for tc in msg["tool_calls"]:
+                    name = tc.get("function", {}).get("name", "?")
+                    args_str = tc.get("function", {}).get("arguments", "")
+                    # Include brief args for context
+                    if args_str and len(args_str) < 200:
+                        tools.append(f"{name}({args_str})")
+                    else:
+                        tools.append(name)
                 lines.append(f"ASSISTANT: [Called tools: {', '.join(tools)}]")
                 if content:
                     lines.append(f"ASSISTANT: {content}")

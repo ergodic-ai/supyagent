@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 from rich.console import Console
@@ -13,8 +14,6 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
-
-from typing import Any
 
 try:
     from importlib.metadata import version as pkg_version
@@ -329,7 +328,8 @@ def list_agents():
 @click.argument("agent_name")
 @click.option("--new", "new_session", is_flag=True, help="Start a new session")
 @click.option("--session", "session_id", help="Resume a specific session by ID")
-def chat(agent_name: str, new_session: bool, session_id: str | None):
+@click.option("--verbose", "-v", is_flag=True, help="Show tool call details and token usage")
+def chat(agent_name: str, new_session: bool, session_id: str | None, verbose: bool):
     """
     Start an interactive chat session with an agent.
 
@@ -346,7 +346,7 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
         config = load_agent_config(agent_name)
     except AgentNotFoundError as e:
         console.print(f"[red]Error:[/red] {e}")
-        console.print(f"\nAvailable agents:")
+        console.print("\nAvailable agents:")
         agents_dir = Path("agents")
         if agents_dir.exists():
             for f in agents_dir.glob("*.yaml"):
@@ -363,25 +363,30 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
     # Determine which session to use
     session = None
     if session_id:
-        # Resume specific session (with prefix matching)
-        session = session_mgr.load_session(agent_name, session_id)
-        if not session:
-            # Try prefix match
-            all_sessions = session_mgr.list_sessions(agent_name)
-            matches = [s for s in all_sessions if s.session_id.startswith(session_id)]
-            if len(matches) == 1:
-                session = session_mgr.load_session(agent_name, matches[0].session_id)
-            elif len(matches) > 1:
-                console.print(f"[yellow]Ambiguous prefix '{session_id}'. Matches:[/yellow]")
-                for m in matches:
-                    console.print(f"  {m.session_id}: {m.title or '(untitled)'}")
-                sys.exit(1)
-            else:
-                console.print(f"[red]Error:[/red] Session '{session_id}' not found")
-                console.print("\nAvailable sessions:")
-                for s in all_sessions:
-                    console.print(f"  - {s.session_id}: {s.title or '(untitled)'}")
-                sys.exit(1)
+        # Try alias first
+        resolved_id = session_mgr.resolve_alias(agent_name, session_id)
+        if resolved_id:
+            session = session_mgr.load_session(agent_name, resolved_id)
+        else:
+            # Resume specific session (with prefix matching)
+            session = session_mgr.load_session(agent_name, session_id)
+            if not session:
+                # Try prefix match
+                all_sessions = session_mgr.list_sessions(agent_name)
+                matches = [s for s in all_sessions if s.session_id.startswith(session_id)]
+                if len(matches) == 1:
+                    session = session_mgr.load_session(agent_name, matches[0].session_id)
+                elif len(matches) > 1:
+                    console.print(f"[yellow]Ambiguous prefix '{session_id}'. Matches:[/yellow]")
+                    for m in matches:
+                        console.print(f"  {m.session_id}: {m.title or '(untitled)'}")
+                    sys.exit(1)
+                else:
+                    console.print(f"[red]Error:[/red] Session '{session_id}' not found")
+                    console.print("\nAvailable sessions:")
+                    for s in all_sessions:
+                        console.print(f"  - {s.session_id}: {s.title or '(untitled)'}")
+                    sys.exit(1)
     elif not new_session:
         # Try to resume current session
         session = session_mgr.get_current_session(agent_name)
@@ -424,8 +429,8 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
     console.print()
 
     # Chat state
-    show_tokens = False
-    debug_mode = False
+    show_tokens = verbose
+    debug_mode = verbose
 
     # Chat loop
     while True:
@@ -464,6 +469,7 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
                         "  /summarize         Force context summarization\n"
                         "  /export [file]     Export conversation to markdown\n"
                         "  /model [name]      Show or change model\n"
+                        "  /reload            Reload tools (pick up new/changed powers)\n"
                         "  /clear             Clear screen\n"
                         "  /quit              Exit the chat\n"
                     )
@@ -587,7 +593,7 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
                         conversation_messages
                     )
 
-                    console.print(f"\n[cyan]Context Status[/cyan]")
+                    console.print("\n[cyan]Context Status[/cyan]")
                     console.print(
                         f"  [dim]Context limit:[/dim] {agent.context_manager.context_limit:,} tokens"
                     )
@@ -613,7 +619,7 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
                         console.print("  [dim]No summary yet[/dim]")
 
                     console.print(
-                        f"\n[cyan]Summarization Triggers (N messages OR K tokens)[/cyan]"
+                        "\n[cyan]Summarization Triggers (N messages OR K tokens)[/cyan]"
                     )
 
                     # Messages trigger (N)
@@ -636,7 +642,7 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
 
                     if status["will_trigger"]:
                         console.print(
-                            f"\n  [yellow]⚡ Summarization will trigger on next message[/yellow]"
+                            "\n  [yellow]⚡ Summarization will trigger on next message[/yellow]"
                         )
                     console.print()
                     continue
@@ -663,6 +669,15 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
                         )
                     except Exception as e:
                         console.print(f"[red]Error:[/red] {e}")
+                    continue
+
+                elif cmd == "reload":
+                    old_count = len(agent.tools)
+                    new_count = agent.reload_tools()
+                    console.print(
+                        f"[green]✓[/green] Reloaded tools: {new_count} "
+                        f"(was {old_count})"
+                    )
                     continue
 
                 elif cmd == "clear":
@@ -915,7 +930,7 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
                         # Show tool completed
                         result = data.get("result", {})
                         if result.get("ok", False):
-                            console.print(f"[green]   ✓ done[/green]")
+                            console.print("[green]   ✓ done[/green]")
                         else:
                             error = result.get("error", "failed")
                             console.print(f"[red]   ✗ {error}[/red]")
@@ -983,9 +998,74 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
 @click.option("--search", "-s", "search_query", help="Search sessions by title keyword")
 @click.option("--delete", "-d", "delete_id", help="Delete a specific session by ID (or prefix)")
 @click.option("--delete-all", "delete_all", is_flag=True, help="Delete all sessions for this agent")
-def sessions(agent_name: str, search_query: str | None, delete_id: str | None, delete_all: bool):
-    """List all sessions for an agent."""
+@click.option("--name", "-n", nargs=2, type=str, metavar="SESSION_ID ALIAS",
+              help="Set a named alias for a session")
+@click.option("--export", "-e", "export_id", help="Export a session (by ID, prefix, or alias)")
+@click.option("--format", "-f", "export_fmt", type=click.Choice(["markdown", "json"]),
+              default="markdown", help="Export format (default: markdown)")
+def sessions(
+    agent_name: str,
+    search_query: str | None,
+    delete_id: str | None,
+    delete_all: bool,
+    name: tuple[str, str] | None,
+    export_id: str | None,
+    export_fmt: str,
+):
+    """
+    List, search, name, export, and manage sessions for an agent.
+
+    \b
+    Examples:
+        supyagent sessions myagent
+        supyagent sessions myagent --search "project"
+        supyagent sessions myagent --name abc123 project-alpha
+        supyagent sessions myagent --export project-alpha
+        supyagent sessions myagent --export abc123 --format json
+    """
     session_mgr = SessionManager()
+
+    # Handle naming a session
+    if name:
+        sid, alias = name
+        # Verify session exists (resolve prefix)
+        session = session_mgr.load_session(agent_name, sid)
+        if not session:
+            all_sessions = session_mgr.list_sessions(agent_name)
+            matches = [s for s in all_sessions if s.session_id.startswith(sid)]
+            if len(matches) == 1:
+                sid = matches[0].session_id
+            else:
+                console.print(f"[red]Session '{sid}' not found[/red]")
+                return
+        session_mgr.set_alias(agent_name, alias, sid)
+        console.print(f"[green]✓[/green] Named session {sid} as [cyan]{alias}[/cyan]")
+        return
+
+    # Handle export
+    if export_id:
+        # Resolve alias or prefix
+        resolved = session_mgr.resolve_alias(agent_name, export_id)
+        if not resolved:
+            # Try as direct ID or prefix
+            session = session_mgr.load_session(agent_name, export_id)
+            if session:
+                resolved = export_id
+            else:
+                all_sessions = session_mgr.list_sessions(agent_name)
+                matches = [s for s in all_sessions if s.session_id.startswith(export_id)]
+                if len(matches) == 1:
+                    resolved = matches[0].session_id
+        if not resolved:
+            console.print(f"[red]Session '{export_id}' not found[/red]")
+            sys.exit(1)
+        output = session_mgr.export_session(agent_name, resolved, fmt=export_fmt)
+        if output:
+            click.echo(output)
+        else:
+            console.print(f"[red]Failed to export session '{resolved}'[/red]")
+            sys.exit(1)
+        return
 
     # Handle single delete
     if delete_id:
@@ -1041,8 +1121,13 @@ def sessions(agent_name: str, search_query: str | None, delete_id: str | None, d
     if search_query:
         title_text += f" (search: '{search_query}')"
 
+    # Load aliases for display
+    aliases = session_mgr._load_aliases(agent_name)
+    alias_by_id = {v: k for k, v in aliases.items()}
+
     table = Table(title=title_text)
     table.add_column("ID", style="cyan")
+    table.add_column("Name", style="green")
     table.add_column("Title")
     table.add_column("Msgs", style="dim", justify="right")
     table.add_column("Created", style="dim")
@@ -1052,17 +1137,18 @@ def sessions(agent_name: str, search_query: str | None, delete_id: str | None, d
     for s in session_list:
         marker = "← current" if s.session_id == current_id else ""
         title = s.title or "(untitled)"
+        alias_name = alias_by_id.get(s.session_id, "")
         created = s.created_at.strftime("%Y-%m-%d %H:%M")
         updated = s.updated_at.strftime("%Y-%m-%d %H:%M")
         # Count messages
         loaded = session_mgr.load_session(agent_name, s.session_id)
         msg_count = str(len(loaded.messages)) if loaded else "?"
-        table.add_row(s.session_id, title, msg_count, created, updated, marker)
+        table.add_row(s.session_id, alias_name, title, msg_count, created, updated, marker)
 
     console.print(table)
     console.print()
     console.print(
-        "[dim]Resume a session:[/dim] supyagent chat " + agent_name + " --session <id>"
+        "[dim]Resume a session:[/dim] supyagent chat " + agent_name + " --session <id or name>"
     )
 
 
@@ -1085,21 +1171,21 @@ def show(agent_name: str):
     console.print(f"[bold]Max Tokens:[/bold] {config.model.max_tokens}")
 
     if config.tools.allow:
-        console.print(f"\n[bold]Allowed Tools:[/bold]")
+        console.print("\n[bold]Allowed Tools:[/bold]")
         for pattern in config.tools.allow:
             console.print(f"  - {pattern}")
 
     if config.tools.deny:
-        console.print(f"\n[bold]Denied Tools:[/bold]")
+        console.print("\n[bold]Denied Tools:[/bold]")
         for pattern in config.tools.deny:
             console.print(f"  - {pattern}")
 
     if config.delegates:
-        console.print(f"\n[bold]Delegates:[/bold]")
+        console.print("\n[bold]Delegates:[/bold]")
         for delegate in config.delegates:
             console.print(f"  - {delegate}")
 
-    console.print(f"\n[bold]System Prompt:[/bold]")
+    console.print("\n[bold]System Prompt:[/bold]")
     console.print(Panel(config.system_prompt, border_style="dim"))
 
 
@@ -1138,7 +1224,7 @@ def validate(agent_name: str):
         console.print(f"[red]  x[/red] Failed to parse YAML: {e}")
         sys.exit(1)
 
-    console.print(f"[green]  ✓[/green] YAML syntax and required fields OK")
+    console.print("[green]  ✓[/green] YAML syntax and required fields OK")
 
     # Step 3: Deep validation
     issues = validate_agent_config(config, agents_dir)
@@ -1147,19 +1233,56 @@ def validate(agent_name: str):
         for issue in issues:
             console.print(f"[yellow]  ![/yellow] {issue}")
     else:
-        console.print(f"[green]  ✓[/green] Model, delegates, and tools OK")
+        console.print("[green]  ✓[/green] Model, delegates, and tools OK")
 
-    # Step 4: Summary
+    # Step 4: Check local tools
+    from supyagent.core.tools import discover_tools as discover_sp_tools
+    from supyagent.core.tools import filter_tools, supypowers_to_openai_tools
+
+    sp_tools = discover_sp_tools()
+    local_count = 0
+    if sp_tools:
+        openai_tools = supypowers_to_openai_tools(sp_tools)
+        filtered = filter_tools(openai_tools, config.tools)
+        local_count = len(filtered)
+        console.print(f"[green]  ✓[/green] Local tools: {local_count} available")
+    else:
+        console.print("[dim]  -[/dim] No local tools (run 'supyagent init')")
+
+    # Step 5: Check service connectivity
+    service_count = 0
+    if config.service.enabled:
+        from supyagent.core.service import get_service_client
+
+        client = get_service_client()
+        if client:
+            if client.health_check():
+                svc_tools = client.discover_tools()
+                service_count = len(svc_tools)
+                console.print(
+                    f"[green]  ✓[/green] Service: connected ({service_count} tools)"
+                )
+            else:
+                console.print(f"[yellow]  ![/yellow] Service: unreachable at {client.base_url}")
+            client.close()
+        else:
+            console.print(
+                "[yellow]  ![/yellow] Service enabled but not connected. "
+                "Run 'supyagent connect'"
+            )
+
+    # Step 6: Summary
     console.print(
         f"\n  Agent: [cyan]{config.name}[/cyan] ({config.type})"
         f"\n  Model: [cyan]{config.model.provider}[/cyan]"
-        f"\n  Tools: {len(config.tools.allow)} allow, {len(config.tools.deny)} deny"
+        f"\n  Tools: {local_count} local, {service_count} service"
+        f"\n  Patterns: {len(config.tools.allow)} allow, {len(config.tools.deny)} deny"
     )
     if config.delegates:
         console.print(f"  Delegates: {', '.join(config.delegates)}")
 
     if not issues:
-        console.print(f"\n[green]  All checks passed.[/green]")
+        console.print("\n[green]  All checks passed.[/green]")
 
 
 @cli.command()
@@ -1264,23 +1387,23 @@ def doctor():
     # 6. Check sessions directory
     sessions_dir = Path(".supyagent/sessions")
     if sessions_dir.exists():
-        console.print(f"[green]  ✓[/green] Sessions directory writable")
+        console.print("[green]  ✓[/green] Sessions directory writable")
     else:
-        console.print(f"[dim]  -[/dim] No sessions yet (will be created on first chat)")
+        console.print("[dim]  -[/dim] No sessions yet (will be created on first chat)")
 
     # 7. Check config encryption
     config_dir = Path.home() / ".supyagent" / "config"
     key_file = config_dir / "key.key"
     if key_file.exists():
-        console.print(f"[green]  ✓[/green] Config encryption working")
+        console.print("[green]  ✓[/green] Config encryption working")
     else:
-        console.print(f"[dim]  -[/dim] Config encryption not yet initialized")
+        console.print("[dim]  -[/dim] Config encryption not yet initialized")
 
     # Summary
     if all_ok:
-        console.print(f"\n[green]  All checks passed.[/green]")
+        console.print("\n[green]  All checks passed.[/green]")
     else:
-        console.print(f"\n[yellow]  Some issues found. See above for fixes.[/yellow]")
+        console.print("\n[yellow]  Some issues found. See above for fixes.[/yellow]")
 
 
 # =============================================================================
@@ -1412,7 +1535,7 @@ def {name}(input: {class_name}Input) -> {class_name}Output:
     tool_path.write_text(template)
     console.print(f"[green]  ✓[/green] Created [cyan]{tool_path}[/cyan]")
     console.print(f"\n  The tool will be available as [cyan]{name}__<function_name>[/cyan]")
-    console.print(f"  Edit the file to add your implementation.")
+    console.print("  Edit the file to add your implementation.")
 
 
 @tools_group.command("test")
@@ -1434,8 +1557,8 @@ def tools_test(tool_name: str, args_json: str, secrets: tuple[str, ...]):
     from supyagent.core.tools import execute_tool
 
     if "__" not in tool_name:
-        console.print(f"[red]Error:[/red] Tool name must be in 'script__function' format")
-        console.print(f"  Example: shell__run_command, files__read_file")
+        console.print("[red]Error:[/red] Tool name must be in 'script__function' format")
+        console.print("  Example: shell__run_command, files__read_file")
         sys.exit(1)
 
     script, func = tool_name.split("__", 1)
@@ -1452,7 +1575,7 @@ def tools_test(tool_name: str, args_json: str, secrets: tuple[str, ...]):
     result = execute_tool(script, func, args, secrets=secrets_dict)
 
     if result.get("ok"):
-        console.print(f"[green]  ✓[/green] ok: true")
+        console.print("[green]  ✓[/green] ok: true")
         data = result.get("data")
         if data is not None:
             if isinstance(data, str) and len(data) > 200:
@@ -1460,7 +1583,7 @@ def tools_test(tool_name: str, args_json: str, secrets: tuple[str, ...]):
             else:
                 console.print(f"  data: {json.dumps(data, indent=2) if not isinstance(data, str) else data}")
     else:
-        console.print(f"[red]  x[/red] ok: false")
+        console.print("[red]  x[/red] ok: false")
         console.print(f"  error: {result.get('error', 'unknown')}")
         if result.get("error_type"):
             console.print(f"  error_type: {result['error_type']}")
@@ -1518,19 +1641,19 @@ def schema():
     console.print("[bold]Top-level fields:[/bold]")
     _print_model(AgentConfig)
 
-    console.print(f"\n[bold]model:[/bold]")
+    console.print("\n[bold]model:[/bold]")
     _print_model(ModelConfig, indent=1)
 
-    console.print(f"\n[bold]tools:[/bold]")
+    console.print("\n[bold]tools:[/bold]")
     _print_model(ToolPermissions, indent=1)
 
-    console.print(f"\n[bold]context:[/bold]")
+    console.print("\n[bold]context:[/bold]")
     _print_model(ContextSettings, indent=1)
 
-    console.print(f"\n[bold]supervisor:[/bold]")
+    console.print("\n[bold]supervisor:[/bold]")
     _print_model(SupervisorSettings, indent=1)
 
-    console.print(f"\n[bold]limits (dict):[/bold]")
+    console.print("\n[bold]limits (dict):[/bold]")
     console.print("    [cyan]max_tool_calls_per_turn[/cyan] [dim](default: 20)[/dim]")
     console.print("      [dim]# Max tool calls per user message[/dim]")
     console.print("    [cyan]circuit_breaker_threshold[/cyan] [dim](default: 3)[/dim]")
@@ -1725,7 +1848,7 @@ def run(
             result_data = data.get("result", {})
             ok = result_data.get("ok", False)
             if ok:
-                console_err.print(f"[green]   ✓ done[/green]")
+                console_err.print("[green]   ✓ done[/green]")
             else:
                 error = result_data.get("error", "unknown error")
                 console_err.print(f"[red]   ✗ {error}[/red]")
@@ -2065,6 +2188,101 @@ def agents():
 
 
 @cli.command()
+@click.argument("workflow_file", type=click.Path(exists=True))
+@click.option("--validate-only", is_flag=True, help="Only validate, don't run")
+@click.option("--output", "-o", type=click.Choice(["text", "json"]), default="text")
+def orchestrate(workflow_file: str, validate_only: bool, output: str):
+    """
+    Run a multi-agent workflow from a YAML file.
+
+    The workflow defines a sequence of steps, each handled by a specific agent.
+    Steps can depend on outputs from previous steps using {{variable}} syntax.
+
+    \b
+    Example workflow (workflows/daily-report.yaml):
+        name: daily-report
+        steps:
+          - agent: email-checker
+            task: "Summarize important emails from today"
+            output: email_summary
+          - agent: report-writer
+            task: "Write a daily report including: {{email_summary}}"
+            depends_on: [email_summary]
+
+    \b
+    Examples:
+        supyagent orchestrate workflows/daily-report.yaml
+        supyagent orchestrate workflows/pipeline.yaml --validate-only
+        supyagent orchestrate workflows/pipeline.yaml --output json
+    """
+    from supyagent.core.orchestrator import Workflow, run_workflow
+
+    workflow_path = Path(workflow_file)
+
+    try:
+        workflow = Workflow.from_file(workflow_path)
+    except Exception as e:
+        console.print(f"[red]Error loading workflow:[/red] {e}")
+        sys.exit(1)
+
+    # Validate
+    issues = workflow.validate()
+    if issues:
+        console.print("[yellow]Workflow validation issues:[/yellow]")
+        for issue in issues:
+            console.print(f"  [yellow]![/yellow] {issue}")
+        if validate_only or any("not found" in i for i in issues):
+            sys.exit(1)
+
+    if validate_only:
+        console.print(
+            f"[green]✓[/green] Workflow '{workflow.name}' is valid "
+            f"({len(workflow.steps)} steps)"
+        )
+        return
+
+    console.print(
+        f"[bold]Running workflow:[/bold] {workflow.name} "
+        f"({len(workflow.steps)} steps)\n"
+    )
+
+    def on_step_start(i: int, agent: str, task: str):
+        console.print(
+            f"[cyan]Step {i + 1}/{len(workflow.steps)}:[/cyan] "
+            f"[bold]{agent}[/bold]"
+        )
+        console.print(f"  [dim]{task[:100]}{'...' if len(task) > 100 else ''}[/dim]")
+
+    def on_step_end(_i: int, _agent: str, result: dict):
+        if result.get("ok"):
+            data_preview = str(result.get("data", ""))[:100]
+            console.print(f"  [green]✓[/green] {data_preview}")
+        else:
+            console.print(f"  [red]✗[/red] {result.get('error', 'failed')}")
+        console.print()
+
+    result = run_workflow(
+        workflow,
+        on_step_start=on_step_start if output == "text" else None,
+        on_step_end=on_step_end if output == "text" else None,
+    )
+
+    if output == "json":
+        click.echo(json.dumps(result, indent=2))
+    elif result.get("ok"):
+        console.print("[green]Workflow completed successfully[/green]")
+        outputs = result.get("outputs", {})
+        if outputs:
+            console.print("\n[bold]Outputs:[/bold]")
+            for key, value in outputs.items():
+                preview = str(value)[:200]
+                console.print(f"  {key}: {preview}")
+    else:
+        console.print(f"[red]Workflow failed:[/red] {result.get('error')}")
+        sys.exit(1)
+
+
+@cli.command()
 @click.argument("task")
 @click.option(
     "--planner",
@@ -2156,6 +2374,134 @@ def cleanup():
         console.print("[dim]No instances to clean up[/dim]")
     else:
         console.print(f"[green]✓[/green] Cleaned up {count} instance(s)")
+
+
+# =============================================================================
+# Telemetry Commands
+# =============================================================================
+
+
+@cli.command()
+@click.argument("agent_name")
+@click.option("--session", "-s", "session_id", help="Session ID (default: all sessions)")
+@click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
+def telemetry(agent_name: str, session_id: str | None, as_json: bool):
+    """
+    View telemetry data for an agent.
+
+    Shows tool call frequency, timing, error rates, and token usage.
+
+    \b
+    Examples:
+        supyagent telemetry myagent
+        supyagent telemetry myagent --session abc123
+        supyagent telemetry myagent --json
+    """
+    telemetry_dir = Path(".supyagent/telemetry") / agent_name
+
+    if not telemetry_dir.exists():
+        console.print(f"[dim]No telemetry data for '{agent_name}'[/dim]")
+        return
+
+    # Collect data from sessions
+    if session_id:
+        files = [telemetry_dir / f"{session_id}.jsonl"]
+        if not files[0].exists():
+            console.print(f"[red]Session '{session_id}' telemetry not found[/red]")
+            return
+    else:
+        files = sorted(telemetry_dir.glob("*.jsonl"))
+
+    if not files:
+        console.print(f"[dim]No telemetry data for '{agent_name}'[/dim]")
+        return
+
+    # Parse all events
+    tool_stats: dict[str, dict[str, Any]] = {}
+    total_llm_calls = 0
+    total_tokens = 0
+    total_errors = 0
+    total_turns = 0
+
+    for f in files:
+        if not f.exists():
+            continue
+        try:
+            with open(f) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    event = json.loads(line)
+                    etype = event.get("type")
+
+                    if etype == "tool_call":
+                        tool = event.get("tool", "?")
+                        if tool not in tool_stats:
+                            tool_stats[tool] = {
+                                "calls": 0, "ok": 0, "errors": 0,
+                                "total_ms": 0, "is_service": False,
+                            }
+                        tool_stats[tool]["calls"] += 1
+                        tool_stats[tool]["total_ms"] += event.get("duration_ms", 0)
+                        tool_stats[tool]["is_service"] = event.get("is_service", False)
+                        if event.get("ok"):
+                            tool_stats[tool]["ok"] += 1
+                        else:
+                            tool_stats[tool]["errors"] += 1
+                    elif etype == "llm_call":
+                        total_llm_calls += 1
+                        total_tokens += event.get("input_tokens", 0) + event.get("output_tokens", 0)
+                    elif etype == "error":
+                        total_errors += 1
+                    elif etype == "turn":
+                        total_turns += 1
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    if as_json:
+        click.echo(json.dumps({
+            "agent": agent_name,
+            "turns": total_turns,
+            "llm_calls": total_llm_calls,
+            "total_tokens": total_tokens,
+            "errors": total_errors,
+            "tools": tool_stats,
+        }, indent=2))
+        return
+
+    # Display summary
+    console.print(f"\n[bold]Telemetry for {agent_name}[/bold]")
+    console.print(f"  Sessions: {len(files)}")
+    console.print(f"  Turns: {total_turns}")
+    console.print(f"  LLM calls: {total_llm_calls}")
+    if total_tokens > 0:
+        console.print(f"  Total tokens: {total_tokens:,}")
+    console.print(f"  Errors: {total_errors}")
+    console.print()
+
+    if tool_stats:
+        table = Table(title="Tool Usage")
+        table.add_column("Tool", style="cyan")
+        table.add_column("Calls", justify="right")
+        table.add_column("OK", justify="right", style="green")
+        table.add_column("Errors", justify="right", style="red")
+        table.add_column("Avg (ms)", justify="right", style="dim")
+        table.add_column("Type", style="dim")
+
+        for name, stats in sorted(tool_stats.items(), key=lambda x: x[1]["calls"], reverse=True):
+            avg_ms = stats["total_ms"] / stats["calls"] if stats["calls"] > 0 else 0
+            tool_type = "service" if stats["is_service"] else "local"
+            table.add_row(
+                name,
+                str(stats["calls"]),
+                str(stats["ok"]),
+                str(stats["errors"]),
+                f"{avg_ms:.0f}",
+                tool_type,
+            )
+
+        console.print(table)
 
 
 # =============================================================================
@@ -2273,7 +2619,7 @@ def process_show(process_id: str):
     # Show metadata
     meta = proc.get("metadata", {})
     if meta:
-        console.print(f"\n[bold]Metadata:[/bold]")
+        console.print("\n[bold]Metadata:[/bold]")
         for key, value in meta.items():
             if isinstance(value, str) and len(value) > 100:
                 value = value[:100] + "..."
@@ -2286,6 +2632,7 @@ def process_show(process_id: str):
 def process_output(process_id: str, tail: int):
     """Show output from a background process."""
     import asyncio
+
     from supyagent.core.supervisor import get_supervisor
 
     supervisor = get_supervisor()
@@ -2299,7 +2646,7 @@ def process_output(process_id: str, tail: int):
                 click.echo(output)
             stderr = data.get("stderr", "")
             if stderr:
-                console.print(f"\n[bold red]STDERR:[/bold red]")
+                console.print("\n[bold red]STDERR:[/bold red]")
                 click.echo(stderr)
         else:
             click.echo(data)
@@ -2313,6 +2660,7 @@ def process_output(process_id: str, tail: int):
 def process_kill(process_id: str, force: bool):
     """Kill a running background process."""
     import asyncio
+
     from supyagent.core.supervisor import get_supervisor
 
     if not force:
@@ -2332,6 +2680,7 @@ def process_kill(process_id: str, force: bool):
 def process_cleanup():
     """Remove completed/failed processes from tracking."""
     import asyncio
+
     from supyagent.core.supervisor import get_supervisor
 
     supervisor = get_supervisor()
@@ -2434,8 +2783,8 @@ def config_import(file_path: str, key_filter: str | None):
     try:
         # If filter is specified, we need custom handling
         if key_filter:
-            from pathlib import Path
             import re
+            from pathlib import Path
 
             path = Path(file_path)
             pattern = re.compile(r"^(?:export\s+)?([A-Z_][A-Z0-9_]*)=(.+)$")
@@ -2512,6 +2861,236 @@ def config_export(file_path: str, force: bool):
         pass
 
     console.print(f"[green]✓[/green] Exported {len(keys)} key(s) to {file_path}")
+
+
+# =============================================================================
+# Service Tool Commands (direct CLI access to cloud integrations)
+# =============================================================================
+
+
+@cli.group("service")
+def service_group():
+    """
+    Use cloud integration tools directly from the CLI.
+
+    Execute service tools (Gmail, Slack, GitHub, etc.) without running
+    a full agent conversation loop.
+
+    \b
+    Examples:
+        supyagent service tools                           # List available tools
+        supyagent service tools --provider google         # Filter by provider
+        supyagent service run gmail:send_message '{...}'  # Execute a tool
+    """
+    pass
+
+
+@service_group.command("tools")
+@click.option(
+    "--provider",
+    "-p",
+    default=None,
+    help="Filter tools by provider (e.g., google, slack, github)",
+)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def service_tools(provider: str | None, as_json: bool):
+    """
+    List available service tools.
+
+    Shows all tools from connected integrations. Use --provider to filter
+    by a specific provider.
+
+    \b
+    Examples:
+        supyagent service tools
+        supyagent service tools --provider google
+        supyagent service tools --json
+    """
+    from supyagent.core.service import get_service_client
+
+    client = get_service_client()
+    if not client:
+        console.print("[yellow]Not connected to service.[/yellow]")
+        console.print("Run [cyan]supyagent connect[/cyan] to authenticate.")
+        sys.exit(1)
+
+    tools = client.discover_tools()
+    client.close()
+
+    if not tools:
+        console.print("[dim]No tools available. Connect integrations on the dashboard.[/dim]")
+        return
+
+    # Filter by provider if specified
+    if provider:
+        tools = [
+            t for t in tools
+            if t.get("metadata", {}).get("provider", "").lower() == provider.lower()
+        ]
+        if not tools:
+            console.print(f"[yellow]No tools found for provider '{provider}'.[/yellow]")
+            return
+
+    if as_json:
+        # Output structured JSON for machine consumption
+        output = []
+        for tool in tools:
+            meta = tool.get("metadata", {})
+            func = tool.get("function", {})
+            output.append({
+                "name": f"{meta.get('provider', '?')}:{func.get('name', '?')}",
+                "description": func.get("description", ""),
+                "provider": meta.get("provider"),
+                "service": meta.get("service"),
+                "method": meta.get("method"),
+                "parameters": func.get("parameters", {}),
+            })
+        click.echo(json.dumps(output, indent=2))
+        return
+
+    # Group by provider/service for table display
+    table = Table(title="Service Tools")
+    table.add_column("Tool", style="cyan")
+    table.add_column("Description")
+    table.add_column("Provider", style="dim")
+
+    for tool in tools:
+        meta = tool.get("metadata", {})
+        func = tool.get("function", {})
+        tool_name = func.get("name", "?")
+        desc = func.get("description", "")
+        # Truncate long descriptions
+        if len(desc) > 60:
+            desc = desc[:57] + "..."
+        prov = meta.get("provider", "?")
+        table.add_row(tool_name, desc, prov)
+
+    console.print(table)
+    console.print(f"\n[dim]{len(tools)} tools available[/dim]")
+    console.print(
+        "[dim]Run a tool:[/dim] supyagent service run <tool_name> '<json_args>'"
+    )
+
+
+@service_group.command("run")
+@click.argument("tool_spec")
+@click.argument("args_json", required=False, default="{}")
+@click.option(
+    "--input",
+    "-i",
+    "input_file",
+    type=click.Path(),
+    help="Read arguments from JSON file (use '-' for stdin)",
+)
+def service_run(tool_spec: str, args_json: str, input_file: str | None):
+    """
+    Execute a service tool directly.
+
+    TOOL_SPEC is the tool name (e.g., gmail_send_message or gmail:send_message).
+    ARGS_JSON is the JSON arguments (optional if using --input).
+
+    \b
+    Examples:
+        supyagent service run gmail_list_messages '{"max_results": 5}'
+        supyagent service run slack:send_message '{"channel": "#general", "text": "Hello"}'
+        supyagent service run github_list_repos
+        echo '{"query": "test"}' | supyagent service run gmail_search_messages --input -
+    """
+    from supyagent.core.service import get_service_client
+
+    client = get_service_client()
+    if not client:
+        console.print("[yellow]Not connected to service.[/yellow]")
+        console.print("Run [cyan]supyagent connect[/cyan] to authenticate.")
+        sys.exit(1)
+
+    # Parse arguments
+    if input_file:
+        if input_file == "-":
+            raw = sys.stdin.read().strip()
+        else:
+            input_path = Path(input_file)
+            if not input_path.exists():
+                console.print(f"[red]Error:[/red] File not found: {input_file}")
+                sys.exit(1)
+            raw = input_path.read_text().strip()
+        try:
+            args = json.loads(raw) if raw else {}
+        except json.JSONDecodeError as e:
+            console.print(f"[red]Error:[/red] Invalid JSON in input: {e}")
+            sys.exit(1)
+    else:
+        try:
+            args = json.loads(args_json) if args_json else {}
+        except json.JSONDecodeError as e:
+            console.print(f"[red]Error:[/red] Invalid JSON arguments: {e}")
+            sys.exit(1)
+
+    # Normalize tool spec: support both "gmail:send_message" and "gmail_send_message"
+    tool_name = tool_spec.replace(":", "_")
+
+    # Discover tools to find metadata
+    console_err.print("[dim]Discovering tools...[/dim]")
+    tools = client.discover_tools()
+
+    if not tools:
+        console.print("[red]Error:[/red] No tools available. Connect integrations on the dashboard.")
+        client.close()
+        sys.exit(1)
+
+    # Find the matching tool
+    matched_tool = None
+    for tool in tools:
+        func = tool.get("function", {})
+        if func.get("name") == tool_name:
+            matched_tool = tool
+            break
+
+    if not matched_tool:
+        # Try partial matching (provider:action without service prefix)
+        for tool in tools:
+            func = tool.get("function", {})
+            name = func.get("name", "")
+            # Match suffix: "send_message" matches "gmail_send_message"
+            if name.endswith(f"_{tool_name}") or name.endswith(f"_{tool_spec.replace(':', '_')}"):
+                matched_tool = tool
+                break
+
+    if not matched_tool:
+        console.print(f"[red]Error:[/red] Tool '{tool_spec}' not found.")
+        console.print()
+        # Suggest similar tools
+        available = [t.get("function", {}).get("name", "") for t in tools]
+        suggestions = [n for n in available if tool_name.split("_")[0] in n]
+        if suggestions:
+            console.print("[dim]Did you mean:[/dim]")
+            for s in suggestions[:5]:
+                console.print(f"  - {s}")
+        else:
+            console.print(f"[dim]Available tools ({len(available)}):[/dim]")
+            for n in available[:10]:
+                console.print(f"  - {n}")
+            if len(available) > 10:
+                console.print(f"  [dim]... and {len(available) - 10} more[/dim]")
+        client.close()
+        sys.exit(1)
+
+    metadata = matched_tool.get("metadata", {})
+    func_name = matched_tool.get("function", {}).get("name", tool_spec)
+
+    console_err.print(
+        f"[dim]Executing {func_name} "
+        f"({metadata.get('method', '?')} {metadata.get('path', '?')})...[/dim]"
+    )
+
+    result = client.execute_tool(func_name, args, metadata)
+    client.close()
+
+    # Output result as JSON
+    click.echo(json.dumps(result, indent=2))
+
+    if not result.get("ok"):
+        sys.exit(1)
 
 
 # =============================================================================

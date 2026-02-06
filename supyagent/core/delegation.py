@@ -179,12 +179,17 @@ class DelegationManager:
         except json.JSONDecodeError:
             return {"ok": False, "error": "Invalid JSON in tool arguments"}
 
+        delegation_config = self.parent.config.delegation
+        default_mode = delegation_config.default_mode
+        default_timeout = delegation_config.default_timeout
+
         if name == "spawn_agent":
             return self._delegate_task(
                 args.get("agent_type", ""),
                 args.get("task", ""),
-                mode="subprocess",
+                mode=default_mode,
                 background=args.get("background", False),
+                timeout=default_timeout,
             )
 
         if name.startswith("delegate_to_"):
@@ -193,9 +198,9 @@ class DelegationManager:
                 agent_name,
                 args.get("task", ""),
                 extra_context=args.get("context"),
-                mode=args.get("mode", "subprocess"),
+                mode=args.get("mode", default_mode),
                 background=args.get("background", False),
-                timeout=args.get("timeout", 300),
+                timeout=args.get("timeout", default_timeout),
             )
 
         return {"ok": False, "error": f"Unknown delegation tool: {name}"}
@@ -205,12 +210,12 @@ class DelegationManager:
         task: str,
         extra_context: str | None = None,
     ) -> DelegationContext:
-        """Build context to pass to a delegate."""
-        # Get conversation summary if we have enough messages to justify
-        # the extra LLM call. For short conversations (≤ 4 non-system messages),
-        # skip summarization to avoid adding unnecessary latency.
+        """Build context to pass to a delegate, respecting delegation config."""
+        delegation_config = self.parent.config.delegation
+
+        # Get conversation summary if configured and we have enough messages
         summary = None
-        if hasattr(self.parent, "messages") and self.parent.messages:
+        if delegation_config.share_summary and hasattr(self.parent, "messages") and self.parent.messages:
             non_system = [
                 m for m in self.parent.messages if m.get("role") != "system"
             ]
@@ -228,6 +233,12 @@ class DelegationManager:
 
         if extra_context:
             context.relevant_facts.append(extra_context)
+
+        # Share credentials if configured
+        if delegation_config.share_credentials and hasattr(self.parent, "credential_manager"):
+            creds = self.parent.credential_manager.list_credentials(self.parent.config.name)
+            if creds:
+                context.shared_data["available_credentials"] = creds
 
         return context
 

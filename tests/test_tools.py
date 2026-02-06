@@ -5,8 +5,6 @@ Tests for supypowers tool integration.
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from supyagent.core.tools import (
     _matches_pattern,
     discover_tools,

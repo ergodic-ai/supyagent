@@ -5,31 +5,29 @@ Covers: read_file, read_file_lines, write_file, list_directory,
         file_info, delete_file, create_directory, copy_file, move_file
 """
 
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from supyagent.default_tools.files import (
+    CopyFileInput,
+    CreateDirectoryInput,
+    DeleteFileInput,
+    FileInfoInput,
+    ListDirectoryInput,
+    MoveFileInput,
     ReadFileInput,
     ReadFileLinesInput,
     WriteFileInput,
-    ListDirectoryInput,
-    FileInfoInput,
-    DeleteFileInput,
-    CreateDirectoryInput,
-    CopyFileInput,
-    MoveFileInput,
+    copy_file,
+    create_directory,
+    delete_file,
+    file_info,
+    list_directory,
+    move_file,
     read_file,
     read_file_lines,
     write_file,
-    list_directory,
-    file_info,
-    delete_file,
-    create_directory,
-    copy_file,
-    move_file,
 )
 
 

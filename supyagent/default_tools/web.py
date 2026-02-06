@@ -9,14 +9,12 @@ for easy consumption by agents. No browser needed — uses HTTP directly.
 """
 
 import json
-import os
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, Optional
 
 import httpx
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 from pydantic import BaseModel, Field
-
 
 # Default headers to look like a normal browser
 _DEFAULT_HEADERS = {

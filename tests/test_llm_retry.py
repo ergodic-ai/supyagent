@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from supyagent.core.llm import LLMClient
+from supyagent.core.llm import LLMClient, LLMError
 
 
 class TestLLMRetry:
@@ -78,7 +78,7 @@ class TestLLMRetry:
 
     @patch("supyagent.core.llm.completion")
     def test_raises_after_max_retries(self, mock_completion):
-        """Should raise after exhausting retries."""
+        """Should raise LLMError with friendly message after exhausting retries."""
         from litellm.exceptions import RateLimitError
 
         mock_completion.side_effect = RateLimitError(
@@ -87,7 +87,7 @@ class TestLLMRetry:
 
         client = LLMClient("test-model", max_retries=2, retry_delay=0.01)
 
-        with pytest.raises(RateLimitError):
+        with pytest.raises(LLMError, match="Rate limit exceeded"):
             client.chat([{"role": "user", "content": "test"}])
 
         # 1 initial + 2 retries = 3 attempts
@@ -116,7 +116,7 @@ class TestLLMRetry:
 
         client = LLMClient("test-model", max_retries=0, retry_delay=0.01)
 
-        with pytest.raises(RateLimitError):
+        with pytest.raises(LLMError, match="Rate limit exceeded"):
             client.chat([{"role": "user", "content": "test"}])
 
         assert mock_completion.call_count == 1

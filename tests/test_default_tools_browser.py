@@ -5,27 +5,25 @@ Covers: browse, screenshot, click, type_text, get_page_state, close_browser
 Uses mocked Playwright to avoid requiring actual browser installation.
 """
 
-import os
 from pathlib import Path
-from unittest.mock import patch, MagicMock, PropertyMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from supyagent.default_tools.browser import (
     BrowseInput,
-    ScreenshotInput,
     ClickInput,
-    TypeTextInput,
-    GetPageStateInput,
     CloseBrowserInput,
-    browse,
-    screenshot,
-    click,
-    type_text,
-    get_page_state,
-    close_browser,
+    GetPageStateInput,
+    ScreenshotInput,
+    TypeTextInput,
     _html_to_markdown,
-    _close_browser,
+    browse,
+    click,
+    close_browser,
+    get_page_state,
+    screenshot,
+    type_text,
 )
 
 

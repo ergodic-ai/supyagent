@@ -11,10 +11,9 @@ Provides structured output with metadata (size, modified time, type).
 import os
 import time
 from pathlib import Path
-from typing import Optional, List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
-
 
 # Directories to always skip
 _SKIP_DIRS = {

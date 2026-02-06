@@ -11,8 +11,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from supyagent.core.credentials import CredentialManager
 from supyagent.core.context_manager import ContextManager
+from supyagent.core.credentials import CredentialManager
 from supyagent.core.engine import BaseAgentEngine, MaxIterationsError
 from supyagent.core.session_manager import SessionManager
 from supyagent.core.tools import REQUEST_CREDENTIAL_TOOL, is_credential_request
@@ -21,7 +21,6 @@ from supyagent.models.session import Message, Session
 from supyagent.utils.media import Content, content_to_storable, resolve_media_refs
 
 if TYPE_CHECKING:
-    from supyagent.core.delegation import DelegationManager
     from supyagent.core.registry import AgentRegistry
 
 
@@ -91,6 +90,14 @@ class Agent(BaseAgentEngine):
             max_tokens_before_summary=ctx.max_tokens_before_summary,
             min_recent_messages=ctx.min_recent_messages,
             response_reserve=ctx.response_reserve,
+        )
+
+        # Initialize telemetry
+        from supyagent.core.telemetry import TelemetryCollector
+
+        self.telemetry = TelemetryCollector(
+            agent_name=config.name,
+            session_id=self.session.meta.session_id,
         )
 
     def _load_tools(self) -> list[dict[str, Any]]:

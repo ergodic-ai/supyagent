@@ -5,8 +5,6 @@ Tests for session management and persistence.
 import json
 from datetime import datetime
 
-import pytest
-
 from supyagent.core.session_manager import SessionManager
 from supyagent.models.session import Message, Session, SessionMeta
 

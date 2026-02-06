@@ -8,14 +8,12 @@ Supports both synchronous (subprocess.run) and async (ProcessSupervisor) executi
 
 from __future__ import annotations
 
-import asyncio
 import json
 import subprocess
 from typing import Any
 
 from supyagent.models.agent_config import ToolPermissions
 from supyagent.models.tool_result import ToolResult, timed_execution
-
 
 # Special tool that allows LLM to request credentials from user
 REQUEST_CREDENTIAL_TOOL: dict[str, Any] = {
@@ -362,20 +360,20 @@ def supypowers_to_openai_tools(sp_tools: list[dict[str, Any]]) -> list[dict[str,
     }
     """
     import os
-    
+
     openai_tools = []
 
     for script_entry in sp_tools:
         script_path = script_entry.get("script", "")
         functions = script_entry.get("functions", [])
-        
+
         # Extract script name from path (e.g., "files" from "/path/to/files.py")
         script_name = os.path.splitext(os.path.basename(script_path))[0]
-        
+
         # Skip __init__ files with no functions
         if script_name == "__init__" and not functions:
             continue
-        
+
         for func_def in functions:
             func_name = func_def.get("name", "")
             description = func_def.get("description", "No description")

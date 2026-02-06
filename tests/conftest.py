@@ -4,7 +4,7 @@ Pytest fixtures for supyagent tests.
 
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -94,11 +94,11 @@ def mock_llm_response_with_tool_call():
     response = MagicMock()
     response.choices = [MagicMock()]
     response.choices[0].message.content = None
-    
+
     tool_call = MagicMock()
     tool_call.id = "call_123"
     tool_call.function.name = "test__hello"
     tool_call.function.arguments = '{"name": "World"}'
-    
+
     response.choices[0].message.tool_calls = [tool_call]
     return response

@@ -10,14 +10,12 @@ and other models via LiteLLM's unified API. Supports all major providers.
 
 import base64
 import hashlib
-import os
 from pathlib import Path
 from typing import Optional
 
 import httpx
 import litellm
 from pydantic import BaseModel, Field
-
 
 # ── generate_image ──────────────────────────────────────────────────────────
 
