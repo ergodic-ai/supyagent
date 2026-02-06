@@ -18,6 +18,9 @@ import httpx
 import litellm
 from pydantic import BaseModel, Field
 
+# Suppress litellm's verbose stdout messages that corrupt JSON output
+litellm.suppress_debug_info = True
+
 
 # ── generate_image ──────────────────────────────────────────────────────────
 
@@ -62,9 +65,10 @@ class GenerateImageOutput(BaseModel):
 
 def generate_image(input: GenerateImageInput) -> GenerateImageOutput:
     """
-    Generate images using AI models (DALL-E, Stable Diffusion, Flux, etc.).
+    Generate images using AI models (DALL-E, Stable Diffusion, Flux, Gemini, etc.).
 
-    Uses LiteLLM to call any supported image generation provider. The generated
+    Uses LiteLLM to call any supported image generation provider. Any valid LiteLLM
+    model identifier works, not just the ones in the curated list. The generated
     images are saved to disk and returned as file paths.
 
     API keys are read from environment variables:
@@ -72,15 +76,19 @@ def generate_image(input: GenerateImageInput) -> GenerateImageOutput:
     - STABILITY_API_KEY for Stable Diffusion models
     - FAL_API_KEY for Flux models
     - GOOGLE_API_KEY for Gemini Imagen models
+    - OPENROUTER_API_KEY for any model via OpenRouter
 
     Examples:
         >>> generate_image({"prompt": "A sunset over mountains", "model": "dall-e-3"})
-        >>> generate_image({"prompt": "A cat in space", "model": "stability/sd3-large", "size": "1024x1024"})
+        >>> generate_image({"prompt": "A cat in space", "model": "openrouter/google/gemini-2.5-flash-image"})
     """
     try:
         # Create output directory
         out_dir = Path(input.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Allow providers that don't support response_format to still work
+        litellm.drop_params = True
 
         # Call litellm image generation
         response = litellm.image_generation(
@@ -146,6 +154,8 @@ def _api_key_hint(model: str) -> str:
         return "FAL_API_KEY"
     if "gemini" in m or "imagen" in m:
         return "GOOGLE_API_KEY"
+    if "openrouter" in m:
+        return "OPENROUTER_API_KEY"
     if "bedrock" in m:
         return "AWS credentials"
     if "azure" in m:
@@ -231,6 +241,13 @@ _IMAGE_MODELS = [
         "sizes": ["1024x1024"],
         "description": "Google Imagen 3 — highest quality Google image model",
     },
+    {
+        "name": "openrouter/google/gemini-2.5-flash-image",
+        "provider": "openrouter",
+        "api_key_env": "OPENROUTER_API_KEY",
+        "sizes": ["1024x1024"],
+        "description": "Gemini 2.5 Flash with image generation via OpenRouter",
+    },
 ]
 
 
@@ -240,6 +257,7 @@ def list_image_models(input: ListImageModelsInput) -> ListImageModelsOutput:
 
     Returns a curated list of popular models with provider info and required API keys.
     Use this to help choose which model to use for image generation.
+    Note: generate_image accepts ANY valid LiteLLM model identifier, not just those in this list.
 
     Examples:
         >>> list_image_models({})
