@@ -2469,5 +2469,58 @@ def config_export(file_path: str, force: bool):
     console.print(f"[green]✓[/green] Exported {len(keys)} key(s) to {file_path}")
 
 
+@cli.command()
+@click.option("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+@click.option("--port", "-p", default=8000, type=int, help="Bind port (default: 8000)")
+@click.option("--reload", is_flag=True, help="Auto-reload on code changes")
+@click.option(
+    "--cors-origin",
+    multiple=True,
+    default=["*"],
+    help="Allowed CORS origins (default: *)",
+)
+def serve(host: str, port: int, reload: bool, cors_origin: tuple[str, ...]):
+    """
+    Start the API server (Vercel AI SDK compatible).
+
+    The server exposes a streaming chat endpoint compatible with the
+    AI SDK useChat() hook, plus REST endpoints for agents, sessions,
+    and tools.
+
+    \b
+    Examples:
+        supyagent serve                           # localhost:8000
+        supyagent serve --port 3001               # custom port
+        supyagent serve --host 0.0.0.0            # all interfaces
+        supyagent serve --cors-origin http://localhost:3000
+    """
+    try:
+        import uvicorn
+    except ImportError:
+        console.print(
+            "[red]Error:[/red] Server dependencies not installed.\n\n"
+            "Install them with:\n"
+            "  pip install supyagent[serve]\n"
+            "  # or: uv pip install fastapi uvicorn[standard]"
+        )
+        sys.exit(1)
+
+    from supyagent.server.app import create_app
+
+    app = create_app(cors_origins=list(cors_origin))
+
+    console.print(f"[bold]supyagent server[/bold] starting on http://{host}:{port}")
+    console.print(f"[dim]CORS origins: {', '.join(cors_origin)}[/dim]")
+    console.print(f"[dim]Docs: http://{host}:{port}/docs[/dim]\n")
+
+    uvicorn.run(
+        app if not reload else "supyagent.server:create_app",
+        host=host,
+        port=port,
+        reload=reload,
+        factory=reload,
+    )
+
+
 if __name__ == "__main__":
     cli()

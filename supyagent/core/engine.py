@@ -388,12 +388,12 @@ class BaseAgentEngine(ABC):
                 tool_args = tc_dict["function"]["arguments"]
                 tool_id = tc_dict["id"]
 
-                yield ("tool_start", {"name": tool_name, "arguments": tool_args})
+                yield ("tool_start", {"id": tool_id, "name": tool_name, "arguments": tool_args})
 
                 tc_obj = ToolCallObj(tool_id, tool_name, tool_args)
                 result = self._dispatch_tool_call(tc_obj)
 
-                yield ("tool_end", {"name": tool_name, "result": result})
+                yield ("tool_end", {"id": tool_id, "name": tool_name, "result": result})
 
                 self.messages.append({
                     "role": "tool",
