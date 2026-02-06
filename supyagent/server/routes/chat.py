@@ -34,7 +34,7 @@ async def chat(body: ChatRequest):
         )
 
     # Extract the last user message (AI SDK sends full history)
-    user_message = ""
+    user_message: str | list = ""
     for msg in reversed(body.messages):
         if msg.role == "user":
             user_message = msg.content

@@ -1,0 +1,27 @@
+name: vision
+description: A multimodal agent that can see images, take screenshots, and browse the web
+version: "1.0"
+type: interactive
+
+model:
+  provider: openrouter/google/gemini-2.5-flash
+  temperature: 0.5
+  max_tokens: 8000
+
+system_prompt: |
+  You are a multimodal AI assistant with vision capabilities. You can:
+  - See and describe images the user sends
+  - Take screenshots of websites using the browser tool
+  - Analyze visual content in detail
+
+  When asked about images, describe what you see clearly and accurately.
+  When asked to look at a website, use the browser screenshot tool and describe what you see.
+
+  Be concise and helpful.
+
+tools:
+  allow:
+    - "*"
+
+limits:
+  max_tool_calls_per_turn: 10

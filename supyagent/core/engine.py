@@ -23,6 +23,7 @@ from supyagent.core.tools import (
     supypowers_to_openai_tools,
 )
 from supyagent.models.agent_config import AgentConfig, get_full_system_prompt
+from supyagent.utils.media import detect_images_in_tool_result, make_image_content_part, make_text_content_part
 
 if TYPE_CHECKING:
     from supyagent.core.delegation import DelegationManager
@@ -284,10 +285,22 @@ class BaseAgentEngine(ABC):
 
                     result = self._dispatch_tool_call(tc_obj)
 
+                    # Detect images in tool result and build multimodal content
+                    images = detect_images_in_tool_result(result)
+                    if images:
+                        tool_content: str | list[dict[str, Any]] = [make_text_content_part(json.dumps(result))]
+                        for img_path in images:
+                            try:
+                                tool_content.append(make_image_content_part(img_path))
+                            except (FileNotFoundError, ValueError):
+                                pass
+                    else:
+                        tool_content = json.dumps(result)
+
                     self.messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
-                        "content": json.dumps(result),
+                        "content": tool_content,
                     })
 
                     if on_tool_result:
@@ -395,10 +408,22 @@ class BaseAgentEngine(ABC):
 
                 yield ("tool_end", {"id": tool_id, "name": tool_name, "result": result})
 
+                # Detect images in tool result and build multimodal content
+                images = detect_images_in_tool_result(result)
+                if images:
+                    tool_content: str | list[dict[str, Any]] = [make_text_content_part(json.dumps(result))]
+                    for img_path in images:
+                        try:
+                            tool_content.append(make_image_content_part(img_path))
+                        except (FileNotFoundError, ValueError):
+                            pass
+                else:
+                    tool_content = json.dumps(result)
+
                 self.messages.append({
                     "role": "tool",
                     "tool_call_id": tool_id,
-                    "content": json.dumps(result),
+                    "content": tool_content,
                 })
 
                 # Internal hook for subclass persistence

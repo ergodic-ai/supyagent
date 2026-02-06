@@ -9,11 +9,13 @@ Sessions are stored as JSONL files with the following format:
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from supyagent.models.session import Message, Session, SessionMeta
+from supyagent.utils.media import content_to_text
 
 
 class SessionManager:
@@ -153,8 +155,11 @@ class SessionManager:
         if message.type == "user" and session.meta.title is None:
             self._update_title(session, message.content or "")
 
-    def _update_title(self, session: Session, first_message: str) -> None:
+    def _update_title(self, session: Session, first_message: str | list) -> None:
         """Generate and save a title from the first user message."""
+        # Extract text from multimodal content
+        if isinstance(first_message, list):
+            first_message = content_to_text(first_message)
         # Simple truncation for now
         title = first_message[:50]
         if len(first_message) > 50:
@@ -257,6 +262,11 @@ class SessionManager:
             summary_path = self._summary_path(agent, session_id)
             if summary_path.exists():
                 summary_path.unlink()
+
+            # Also delete media directory if exists
+            media_dir = self._agent_dir(agent) / f"{session_id}_media"
+            if media_dir.exists():
+                shutil.rmtree(media_dir)
 
             # If this was the current session, clear the current pointer
             current_path = self._current_path(agent)

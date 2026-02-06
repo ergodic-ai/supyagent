@@ -21,6 +21,7 @@ from supyagent.core.tokens import (
     get_context_limit,
 )
 from supyagent.models.context import ContextSummary
+from supyagent.utils.media import content_to_text, strip_images
 
 if TYPE_CHECKING:
     from supyagent.core.llm import LLMClient
@@ -197,7 +198,10 @@ class ContextManager:
         for i in range(protected_start, len(messages) - protected_end):
             msg = messages[i]
             content = msg.get("content", "")
-            if isinstance(content, str) and len(content) > 2000:
+            if isinstance(content, list):
+                # Multimodal: strip images to text to save tokens
+                messages[i] = {**msg, "content": strip_images(content)}
+            elif isinstance(content, str) and len(content) > 2000:
                 messages[i] = {
                     **msg,
                     "content": content[:1000] + "\n...[truncated]...\n" + content[-500:],
@@ -366,6 +370,10 @@ Summary:"""
         for msg in messages:
             role = msg.get("role", "unknown").upper()
             content = msg.get("content", "")
+
+            # Normalize multimodal content to text for summarization
+            if isinstance(content, list):
+                content = content_to_text(content)
 
             if role == "TOOL":
                 # Truncate tool results

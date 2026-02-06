@@ -17,7 +17,7 @@ _SENTINEL = object()
 
 async def agent_to_aisdk_stream(
     agent: Agent,
-    user_message: str,
+    user_message: str | list,
     encoder: StreamEncoder,
     agent_lock: threading.Lock,
 ) -> AsyncGenerator[bytes, None]:

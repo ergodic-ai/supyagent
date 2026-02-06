@@ -18,6 +18,7 @@ from supyagent.core.session_manager import SessionManager
 from supyagent.core.tools import REQUEST_CREDENTIAL_TOOL, is_credential_request
 from supyagent.models.agent_config import AgentConfig, get_full_system_prompt
 from supyagent.models.session import Message, Session
+from supyagent.utils.media import Content, content_to_storable, resolve_media_refs
 
 if TYPE_CHECKING:
     from supyagent.core.delegation import DelegationManager
@@ -118,17 +119,29 @@ class Agent(BaseAgentEngine):
             return self._handle_credential_request(tool_call)
         return super()._dispatch_tool_call(tool_call)
 
+    def _get_media_dir(self) -> Path:
+        """Get the media directory for the current session."""
+        return Path(
+            f".supyagent/sessions/{self.config.name}/{self.session.meta.session_id}_media"
+        )
+
     def _reconstruct_messages(self, session: Session) -> list[dict[str, Any]]:
         """Reconstruct LLM message format from session history."""
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": get_full_system_prompt(self.config)}
         ]
+        media_dir = self._get_media_dir()
 
         for msg in session.messages:
+            content = msg.content
+            # Resolve media:// refs back to base64 for multimodal content
+            if isinstance(content, list):
+                content = resolve_media_refs(content, media_dir)
+
             if msg.type == "user":
-                messages.append({"role": "user", "content": msg.content})
+                messages.append({"role": "user", "content": content})
             elif msg.type == "assistant":
-                m: dict[str, Any] = {"role": "assistant", "content": msg.content}
+                m: dict[str, Any] = {"role": "assistant", "content": content}
                 if msg.tool_calls:
                     m["tool_calls"] = msg.tool_calls
                 messages.append(m)
@@ -136,7 +149,7 @@ class Agent(BaseAgentEngine):
                 messages.append({
                     "role": "tool",
                     "tool_call_id": msg.tool_call_id,
-                    "content": msg.content,
+                    "content": content,
                 })
 
         return messages
@@ -154,18 +167,25 @@ class Agent(BaseAgentEngine):
             except Exception:
                 pass
 
-    def send_message(self, content: str) -> str:
+    def _storable(self, content: Content) -> Content:
+        """Convert multimodal content to storable format (media:// refs)."""
+        if isinstance(content, list):
+            return content_to_storable(content, self._get_media_dir())
+        return content
+
+    def send_message(self, content: Content) -> str:
         """
         Send a user message and get the agent's response.
 
         Handles the full tool-use loop with session persistence.
         """
         # Record user message
-        user_msg = Message(type="user", content=content)
+        user_msg = Message(type="user", content=self._storable(content))
         self.session_manager.append_message(self.session, user_msg)
         self.messages.append({"role": "user", "content": content})
 
         max_iterations = self.config.limits.get("max_tool_calls_per_turn", 20)
+        media_dir = self._get_media_dir()
 
         # Persistence hooks
         def on_message(msg_content: str, tool_calls: list[dict[str, Any]]) -> None:
@@ -179,11 +199,14 @@ class Agent(BaseAgentEngine):
         def on_tool_result(
             tool_call_id: str, name: str, result: dict[str, Any]
         ) -> None:
+            # Get the actual content from the last message (may be multimodal)
+            last_msg = self.messages[-1]
+            storable_content = self._storable(last_msg.get("content", json.dumps(result)))
             tool_msg = Message(
                 type="tool_result",
                 tool_call_id=tool_call_id,
                 name=name,
-                content=json.dumps(result),
+                content=storable_content,
             )
             self.session_manager.append_message(self.session, tool_msg)
 
@@ -199,7 +222,7 @@ class Agent(BaseAgentEngine):
         self._check_and_summarize()
         return result
 
-    def send_message_stream(self, content: str):
+    def send_message_stream(self, content: Content):
         """
         Send a user message and stream the agent's response.
 
@@ -211,7 +234,7 @@ class Agent(BaseAgentEngine):
         - ("done", str): Final complete response
         """
         # Record user message
-        user_msg = Message(type="user", content=content)
+        user_msg = Message(type="user", content=self._storable(content))
         self.session_manager.append_message(self.session, user_msg)
         self.messages.append({"role": "user", "content": content})
 
@@ -228,13 +251,15 @@ class Agent(BaseAgentEngine):
                 )
                 self.session_manager.append_message(self.session, asst_record)
             elif event_type == "_tool_result":
-                # Persist tool result to session
+                # Persist tool result to session (with media refs for images)
                 tool_call_id, name, result = data
+                last_msg = self.messages[-1]
+                storable_content = self._storable(last_msg.get("content", json.dumps(result)))
                 tool_msg = Message(
                     type="tool_result",
                     tool_call_id=tool_call_id,
                     name=name,
-                    content=json.dumps(result),
+                    content=storable_content,
                 )
                 self.session_manager.append_message(self.session, tool_msg)
             elif event_type == "done":

@@ -11,7 +11,7 @@ class ChatMessage(BaseModel):
     """A message in the useChat format."""
 
     role: Literal["user", "assistant", "system", "tool"]
-    content: str
+    content: str | list[dict[str, Any]]
     id: str | None = None
     tool_call_id: str | None = None
     name: str | None = None
@@ -52,7 +52,7 @@ class MessageInfo(BaseModel):
     """Message in a session."""
 
     type: str
-    content: str | None
+    content: str | list[dict[str, Any]] | None
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
     name: str | None = None

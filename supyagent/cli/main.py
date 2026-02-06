@@ -449,6 +449,7 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
                     console.print(
                         "\n[bold]Available commands:[/bold]\n"
                         "  /help              Show this help\n"
+                        "  /image <path> [msg] Send an image with optional message\n"
                         "  /tools             List available tools\n"
                         "  /creds [action]    Manage credentials (list|set|delete)\n"
                         "  /sessions          List all sessions\n"
@@ -771,6 +772,50 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
                     agent.session.meta.title = new_title
                     session_mgr._update_meta(agent.session)
                     console.print(f"[green]Session renamed to \"{new_title}\"[/green]")
+                    continue
+
+                elif cmd == "image":
+                    if len(cmd_parts) < 2:
+                        console.print("[yellow]Usage: /image <path> [message][/yellow]")
+                        continue
+
+                    from supyagent.utils.media import IMAGE_EXTENSIONS, wrap_with_image
+
+                    image_path = Path(cmd_parts[1]).expanduser()
+                    if not image_path.exists():
+                        console.print(f"[red]File not found: {image_path}[/red]")
+                        continue
+                    if image_path.suffix.lower() not in IMAGE_EXTENSIONS:
+                        console.print(f"[red]Unsupported image type: {image_path.suffix}[/red]")
+                        console.print(f"[dim]Supported: {', '.join(sorted(IMAGE_EXTENSIONS))}[/dim]")
+                        continue
+
+                    text_msg = " ".join(cmd_parts[2:]) if len(cmd_parts) > 2 else "Describe this image."
+                    multimodal_content = wrap_with_image(text_msg, image_path)
+
+                    console.print(f"[dim]Sending image: {image_path.name}[/dim]")
+                    console.print()
+                    console.print(f"[bold green]{config.name}>[/bold green]")
+
+                    try:
+                        collected_response = ""
+                        for event_type, data in agent.send_message_stream(multimodal_content):
+                            if event_type == "text":
+                                click.echo(data, nl=False)
+                                collected_response += data
+                            elif event_type == "tool_start":
+                                tool_name = data.get("name", "?")
+                                console.print(f"\n  [dim]⚙ {tool_name}...[/dim]")
+                            elif event_type == "tool_end":
+                                result = data.get("result", {})
+                                status = "✓" if result.get("ok") else "✗"
+                                console.print(f"  [dim]  {status} done[/dim]")
+                            elif event_type == "done":
+                                pass
+                        click.echo("")
+                    except Exception as e:
+                        console.print(f"\n[red]Error: {e}[/red]")
+                    console.print()
                     continue
 
                 elif cmd == "delete":

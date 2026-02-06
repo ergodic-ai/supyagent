@@ -50,7 +50,18 @@ def count_message_tokens(message: dict[str, Any], model: str = "default") -> int
     for key, value in message.items():
         if isinstance(value, str):
             tokens += len(encoding.encode(value))
-        elif isinstance(value, list):  # tool_calls
+        elif isinstance(value, list) and key == "content":
+            # Multimodal content: list of text/image parts
+            for part in value:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        tokens += len(encoding.encode(part.get("text", "")))
+                    elif part.get("type") == "image_url":
+                        # OpenAI low-detail estimate: 85 base + 170 * 4 tiles
+                        tokens += 765
+                else:
+                    tokens += len(encoding.encode(str(part)))
+        elif isinstance(value, list):  # tool_calls etc.
             tokens += len(encoding.encode(str(value)))
 
     return tokens

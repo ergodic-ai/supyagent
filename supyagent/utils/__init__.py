@@ -1,1 +1,1 @@
-"""Utility functions for supyagent."""
+"""Utility modules for supyagent."""
