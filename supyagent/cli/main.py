@@ -2514,6 +2514,235 @@ def config_export(file_path: str, force: bool):
     console.print(f"[green]✓[/green] Exported {len(keys)} key(s) to {file_path}")
 
 
+# =============================================================================
+# Service Connection Commands
+# =============================================================================
+
+
+@cli.command()
+@click.option(
+    "--url",
+    default=None,
+    help="Service URL (default: https://app.supyagent.com)",
+)
+def connect(url: str | None):
+    """
+    Connect to supyagent service for third-party integrations.
+
+    Authenticates via device authorization flow: you'll receive a code
+    to enter in your browser, then the CLI will receive an API key.
+
+    \b
+    Examples:
+        supyagent connect
+        supyagent connect --url https://custom.supyagent.com
+    """
+    import webbrowser
+
+    from supyagent.core.service import (
+        DEFAULT_SERVICE_URL,
+        ServiceClient,
+        poll_for_token,
+        request_device_code,
+        store_service_credentials,
+    )
+
+    base_url = url or DEFAULT_SERVICE_URL
+
+    # Step 1: Request device code
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            progress.add_task("Requesting device code...", total=None)
+            device_data = request_device_code(base_url)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] Could not reach service at {base_url}: {e}")
+        sys.exit(1)
+
+    user_code = device_data["user_code"]
+    device_code = device_data["device_code"]
+    verification_uri = device_data.get("verification_uri", f"{base_url}/device")
+    expires_in = device_data.get("expires_in", 900)
+    interval = device_data.get("interval", 5)
+
+    # Step 2: Show code and open browser
+    console.print()
+    console.print(
+        Panel(
+            f"[bold]Code:[/bold] [cyan bold]{user_code}[/cyan bold]\n\n"
+            f"Visit [link={verification_uri}]{verification_uri}[/link] "
+            f"and enter the code above to authorize this device.",
+            title="Device Authorization",
+            border_style="blue",
+        )
+    )
+    console.print()
+
+    try:
+        webbrowser.open(verification_uri)
+        console.print("[dim]Browser opened automatically.[/dim]")
+    except Exception:
+        console.print(f"[dim]Open this URL in your browser: {verification_uri}[/dim]")
+
+    # Step 3: Poll for approval
+    console.print()
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            progress.add_task("Waiting for authorization...", total=None)
+            api_key = poll_for_token(
+                base_url=base_url,
+                device_code=device_code,
+                interval=interval,
+                expires_in=expires_in,
+            )
+    except TimeoutError:
+        console.print("[red]Error:[/red] Device code expired. Please try again.")
+        sys.exit(1)
+    except PermissionError:
+        console.print("[yellow]Authorization denied.[/yellow]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    # Step 4: Store credentials
+    store_service_credentials(api_key, base_url if url else None)
+    console.print("[green]Connected![/green]")
+    console.print()
+
+    # Step 5: Discover and show available tools
+    try:
+        client = ServiceClient(api_key=api_key, base_url=base_url)
+        tools = client.discover_tools()
+        client.close()
+
+        if tools:
+            # Group by provider
+            providers: dict[str, list[str]] = {}
+            for tool in tools:
+                meta = tool.get("metadata", {})
+                provider = meta.get("provider", "unknown")
+                service = meta.get("service", "")
+                if provider not in providers:
+                    providers[provider] = []
+                if service and service not in providers[provider]:
+                    providers[provider].append(service)
+
+            summary_parts = []
+            for provider, services in sorted(providers.items()):
+                if services:
+                    summary_parts.append(f"{provider} ({', '.join(services)})")
+                else:
+                    summary_parts.append(provider)
+
+            console.print(f"[bold]Available integrations:[/bold] {', '.join(summary_parts)}")
+            console.print(f"[dim]{len(tools)} tools total[/dim]")
+        else:
+            console.print(
+                "[dim]No integrations connected yet. "
+                "Visit the dashboard to connect services.[/dim]"
+            )
+    except Exception:
+        console.print(
+            "[dim]Connected. Run 'supyagent status' to see available tools.[/dim]"
+        )
+
+
+@cli.command()
+def disconnect():
+    """
+    Disconnect from supyagent service.
+
+    Removes the stored API key and service URL.
+    """
+    from supyagent.core.service import clear_service_credentials
+
+    removed = clear_service_credentials()
+    if removed:
+        console.print("[green]Disconnected from service.[/green]")
+    else:
+        console.print("[dim]Not currently connected to a service.[/dim]")
+
+
+@cli.command()
+def status():
+    """
+    Show connection status and available service integrations.
+    """
+    from supyagent.core.service import (
+        DEFAULT_SERVICE_URL,
+        SERVICE_API_KEY,
+        SERVICE_URL,
+        ServiceClient,
+    )
+
+    config_mgr = ConfigManager()
+    api_key = config_mgr.get(SERVICE_API_KEY)
+
+    if not api_key:
+        console.print("[yellow]Not connected to service.[/yellow]")
+        console.print()
+        console.print("Run [cyan]supyagent connect[/cyan] to authenticate.")
+        return
+
+    base_url = config_mgr.get(SERVICE_URL) or DEFAULT_SERVICE_URL
+    console.print(f"[green]Connected[/green] to {base_url}")
+
+    # Health check
+    client = ServiceClient(api_key=api_key, base_url=base_url)
+    reachable = client.health_check()
+
+    if not reachable:
+        console.print(f"[yellow]Service is not reachable at {base_url}[/yellow]")
+        client.close()
+        return
+
+    console.print("[dim]Service is reachable[/dim]")
+    console.print()
+
+    # Discover tools
+    tools = client.discover_tools()
+    client.close()
+
+    if not tools:
+        console.print("[dim]No integrations connected. Visit the dashboard to add services.[/dim]")
+        return
+
+    # Group tools by provider/service
+    providers: dict[str, dict[str, list[str]]] = {}
+    for tool in tools:
+        meta = tool.get("metadata", {})
+        provider = meta.get("provider", "unknown")
+        service = meta.get("service", "general")
+        tool_name = tool.get("function", {}).get("name", "?")
+
+        if provider not in providers:
+            providers[provider] = {}
+        if service not in providers[provider]:
+            providers[provider][service] = []
+        providers[provider][service].append(tool_name)
+
+    table = Table(title="Available Service Tools")
+    table.add_column("Provider", style="cyan")
+    table.add_column("Service")
+    table.add_column("Tools", style="dim", justify="right")
+
+    for provider in sorted(providers):
+        for service in sorted(providers[provider]):
+            tool_count = len(providers[provider][service])
+            table.add_row(provider, service, str(tool_count))
+
+    console.print(table)
+    console.print(f"\n[dim]{len(tools)} tools total[/dim]")
+
+
 @cli.command()
 @click.option("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
 @click.option("--port", "-p", default=8000, type=int, help="Bind port (default: 8000)")

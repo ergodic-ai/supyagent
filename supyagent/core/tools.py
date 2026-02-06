@@ -247,17 +247,37 @@ def _execute_tool_sync_via_supervisor(
         return {"ok": False, "error": f"Supervisor execution failed: {e}"}
 
 
-def _matches_pattern(name: str, pattern: str) -> bool:
+def _matches_pattern(
+    name: str, pattern: str, metadata: dict[str, Any] | None = None
+) -> bool:
     """
     Check if a tool name matches a permission pattern.
 
     Patterns:
+    - "*" matches everything
     - "web_search:*" matches all functions in web_search
     - "web_search:search" matches exactly web_search:search
-    - "*" matches everything
+    - "service:*" matches all service tools (tools with metadata)
+    - "service:gmail:*" matches service tools where service starts with 'gmail'
+    - "service:google:*" matches service tools where provider is 'google'
     """
     if pattern == "*":
         return True
+
+    # Service tool patterns: service:*, service:gmail:*, service:google:*
+    if pattern.startswith("service:"):
+        if metadata is None:
+            return False  # Not a service tool
+        service_pattern = pattern[len("service:"):]
+        if service_pattern == "*":
+            return True  # Match all service tools
+        provider = metadata.get("provider", "")
+        service = metadata.get("service", "")
+        if service_pattern.endswith(":*"):
+            prefix = service_pattern[:-2]
+            return provider == prefix or service.startswith(prefix)
+        # Exact match on service or provider
+        return service == service_pattern or provider == service_pattern
 
     if pattern.endswith(":*"):
         script_pattern = pattern[:-2]
@@ -291,15 +311,20 @@ def filter_tools(
 
     for tool in tools:
         name = tool.get("function", {}).get("name", "")
+        metadata = tool.get("metadata")
 
         # Check deny list first
-        denied = any(_matches_pattern(name, pattern) for pattern in permissions.deny)
+        denied = any(
+            _matches_pattern(name, pattern, metadata) for pattern in permissions.deny
+        )
         if denied:
             continue
 
         # Check allow list (if specified)
         if permissions.allow:
-            allowed = any(_matches_pattern(name, pattern) for pattern in permissions.allow)
+            allowed = any(
+                _matches_pattern(name, pattern, metadata) for pattern in permissions.allow
+            )
             if not allowed:
                 continue
 

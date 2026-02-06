@@ -160,6 +160,19 @@ class SupervisorSettings(BaseModel):
         return timeout, force_background, force_sync
 
 
+class ServiceConfig(BaseModel):
+    """Service integration configuration."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Use service tools when connected (auto-use if API key exists)"
+    )
+    url: str = Field(
+        default="https://app.supyagent.com",
+        description="Service base URL"
+    )
+
+
 class AgentConfig(BaseModel):
     """
     Agent configuration loaded from YAML.
@@ -186,6 +199,10 @@ class AgentConfig(BaseModel):
     supervisor: SupervisorSettings = Field(
         default_factory=SupervisorSettings,
         description="Process supervisor settings for tool and agent execution"
+    )
+    service: ServiceConfig = Field(
+        default_factory=ServiceConfig,
+        description="Service integration settings for third-party tools"
     )
 
 

@@ -21,9 +21,12 @@ system_prompt: |
 
 tools:
   allow:
-    - "*"  # Allow all available tools
+    - "*"  # Allow all available tools (local + service)
 
 will_create_tools: true
+
+service:
+  enabled: true
 
 limits:
   max_tool_calls_per_turn: 10

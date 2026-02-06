@@ -74,6 +74,14 @@ class BaseAgentEngine(ABC):
         self.instance_id: str | None = None
         self.registry: AgentRegistry | None = None
 
+        # Service integration: HTTP-based tools from supyagent_service
+        self._service_client = None
+        self._service_tool_metadata: dict[str, dict[str, Any]] = {}
+        if config.service.enabled:
+            from supyagent.core.service import get_service_client
+
+            self._service_client = get_service_client()
+
     def _setup_delegation(
         self,
         registry: "AgentRegistry | None" = None,
@@ -91,7 +99,7 @@ class BaseAgentEngine(ABC):
             self.instance_id = self.delegation_mgr.parent_id
 
     def _load_base_tools(self) -> list[dict[str, Any]]:
-        """Load supypowers tools filtered by config permissions, plus delegation and process tools."""
+        """Load supypowers + service tools filtered by config permissions, plus delegation and process tools."""
         tools: list[dict[str, Any]] = []
 
         # Discover supypowers tools
@@ -99,6 +107,23 @@ class BaseAgentEngine(ABC):
         openai_tools = supypowers_to_openai_tools(sp_tools)
         filtered = filter_tools(openai_tools, self.config.tools)
         tools.extend(filtered)
+
+        # Discover service tools (HTTP-based third-party integrations)
+        if self._service_client:
+            service_tools = self._service_client.discover_tools()
+            if service_tools:
+                # Store metadata for dispatch routing, then filter
+                for tool in service_tools:
+                    name = tool.get("function", {}).get("name", "")
+                    if name:
+                        self._service_tool_metadata[name] = tool.get("metadata", {})
+
+                filtered_service = filter_tools(service_tools, self.config.tools)
+
+                # Strip metadata before sending to LLM (not part of OpenAI format)
+                for tool in filtered_service:
+                    tool.pop("metadata", None)
+                tools.extend(filtered_service)
 
         # Delegation tools
         if self.delegation_mgr:
@@ -155,8 +180,11 @@ class BaseAgentEngine(ABC):
                 self._tool_failure_counts[name] = self._tool_failure_counts.get(name, 0) + 1
                 return result
             result = execute_process_tool(name, args)
+        elif name in self._service_tool_metadata:
+            # 3. Service tools (HTTP routing to supyagent_service)
+            result = self._execute_service_tool(tool_call)
         else:
-            # 3. Supypowers tools (through supervisor)
+            # 4. Supypowers tools (through supervisor)
             result = self._execute_supypowers_tool(tool_call)
 
         # Track failures for circuit breaker
@@ -201,6 +229,28 @@ class BaseAgentEngine(ABC):
             background=force_background,
             use_supervisor=not force_sync,
         )
+
+    def _execute_service_tool(self, tool_call: Any) -> dict[str, Any]:
+        """Execute a service tool via HTTP through the ServiceClient."""
+        name = tool_call.function.name
+        metadata = self._service_tool_metadata.get(name, {})
+
+        try:
+            args = json.loads(tool_call.function.arguments)
+        except json.JSONDecodeError:
+            return {
+                "ok": False,
+                "error": f"Invalid JSON arguments: {tool_call.function.arguments}",
+                "error_type": "invalid_args",
+            }
+
+        if not self._service_client:
+            return {
+                "ok": False,
+                "error": "Service client not available. Run 'supyagent connect' to authenticate.",
+            }
+
+        return self._service_client.execute_tool(name, args, metadata)
 
     @abstractmethod
     def _get_secrets(self) -> dict[str, str]:
