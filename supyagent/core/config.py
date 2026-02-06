@@ -35,6 +35,8 @@ KNOWN_LLM_KEYS = {
     "PERPLEXITY_API_KEY": "Perplexity AI",
     "DEEPSEEK_API_KEY": "DeepSeek",
     "FIREWORKS_API_KEY": "Fireworks AI",
+    "STABILITY_API_KEY": "Stability.ai (Stable Diffusion 3)",
+    "FAL_API_KEY": "FAL AI (Flux, Bria)",
     "OLLAMA_API_BASE": "Ollama (local) base URL",
 }
 

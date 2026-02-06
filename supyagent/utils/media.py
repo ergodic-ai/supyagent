@@ -97,11 +97,17 @@ def detect_images_in_tool_result(result: dict[str, Any]) -> list[str]:
     """
     images: list[str] = []
 
-    # Strategy 1: explicit _images key
-    if "_images" in result:
-        for img in result["_images"]:
-            if isinstance(img, str) and Path(img).exists():
-                images.append(img)
+    # Strategy 1: explicit image list keys (_images or images)
+    def _collect_image_list(container: dict[str, Any]) -> None:
+        for key in ("_images", "images"):
+            if key in container:
+                for img in container[key]:
+                    if isinstance(img, str) and Path(img).exists() and img not in images:
+                        images.append(img)
+
+    _collect_image_list(result)
+    if isinstance(result.get("data"), dict):
+        _collect_image_list(result["data"])
 
     # Strategy 2: auto-detect screenshot pattern (check top level and nested "data")
     def _check_path(container: dict[str, Any]) -> None:
