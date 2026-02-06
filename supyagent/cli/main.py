@@ -29,7 +29,12 @@ from supyagent.core.executor import ExecutionRunner
 from supyagent.core.registry import AgentRegistry
 from supyagent.core.session_manager import SessionManager
 from supyagent.default_tools import install_default_tools, list_default_tools
-from supyagent.models.agent_config import AgentNotFoundError, load_agent_config
+from supyagent.models.agent_config import (
+    AgentConfigError,
+    AgentNotFoundError,
+    load_agent_config,
+    validate_agent_config,
+)
 
 console = Console()
 console_err = Console(stderr=True)
@@ -37,7 +42,9 @@ console_err = Console(stderr=True)
 
 @click.group()
 @click.version_option(version=_version, prog_name="supyagent")
-def cli():
+@click.option("--debug", is_flag=True, hidden=True, help="Enable debug logging")
+@click.pass_context
+def cli(ctx: click.Context, debug: bool):
     """
     Supyagent - LLM agents powered by supypowers.
 
@@ -51,7 +58,20 @@ def cli():
         supyagent new myagent     # Create an agent
         supyagent chat myagent    # Start chatting
     """
-    pass
+    ctx.ensure_object(dict)
+    ctx.obj["debug"] = debug
+
+    if debug:
+        import logging
+
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="[%(levelname)s] %(name)s: %(message)s",
+        )
+        # Suppress noisy third-party loggers
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
+        logging.getLogger("litellm").setLevel(logging.INFO)
 
 
 @cli.command()
@@ -132,11 +152,31 @@ def init(tools_dir: str, force: bool):
     default="interactive",
     help="Type of agent to create",
 )
-def new(name: str, agent_type: str):
+@click.option(
+    "--model",
+    "-m",
+    "model_provider",
+    default=None,
+    help="Model provider (e.g., 'openrouter/google/gemini-2.5-flash')",
+)
+@click.option(
+    "--from",
+    "from_agent",
+    default=None,
+    help="Clone from an existing agent (e.g., --from myagent)",
+)
+def new(name: str, agent_type: str, model_provider: str | None, from_agent: str | None):
     """
     Create a new agent from template.
 
     NAME is the agent name (will create agents/NAME.yaml)
+
+    \b
+    Examples:
+        supyagent new myagent
+        supyagent new myagent --model openrouter/google/gemini-2.5-flash
+        supyagent new myagent --from existing-agent
+        supyagent new worker --type execution
     """
     agents_dir = Path("agents")
     agents_dir.mkdir(exist_ok=True)
@@ -147,6 +187,41 @@ def new(name: str, agent_type: str):
         if not click.confirm(f"Agent '{name}' already exists. Overwrite?"):
             return
 
+    # Clone from existing agent
+    if from_agent:
+        source_path = agents_dir / f"{from_agent}.yaml"
+        if not source_path.exists():
+            console.print(f"[red]Error:[/red] Source agent '{from_agent}' not found")
+            available = [f.stem for f in agents_dir.glob("*.yaml")]
+            if available:
+                console.print(f"  Available: {', '.join(available)}")
+            return
+
+        import yaml
+
+        with open(source_path) as f:
+            data = yaml.safe_load(f)
+
+        # Update name and optionally model
+        data["name"] = name
+        if model_provider:
+            data.setdefault("model", {})["provider"] = model_provider
+
+        with open(agent_path, "w") as f:
+            yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+        console.print(f"[green]✓[/green] Created agent: [cyan]{agent_path}[/cyan] (cloned from {from_agent})")
+        if model_provider:
+            console.print(f"  Model: [cyan]{model_provider}[/cyan]")
+        console.print()
+        console.print("Next steps:")
+        console.print(f"  1. Edit [cyan]{agent_path}[/cyan] to customize")
+        console.print(f"  2. Run: [cyan]supyagent chat {name}[/cyan]")
+        return
+
+    # Default model
+    model = model_provider or "anthropic/claude-3-5-sonnet-20241022"
+
     # Create template based on type
     if agent_type == "interactive":
         template = f"""name: {name}
@@ -155,16 +230,16 @@ version: "1.0"
 type: interactive
 
 model:
-  provider: anthropic/claude-3-5-sonnet-20241022
+  provider: {model}
   temperature: 0.7
   max_tokens: 4096
 
 system_prompt: |
   You are a helpful AI assistant named {name}.
-  
+
   You have access to various tools via supypowers. Use them when needed
   to help accomplish tasks.
-  
+
   Be concise, helpful, and accurate.
 
 tools:
@@ -184,7 +259,7 @@ version: "1.0"
 type: execution
 
 model:
-  provider: anthropic/claude-3-5-sonnet-20241022
+  provider: {model}
   temperature: 0.3  # Lower temperature for consistency
   max_tokens: 2048
 
@@ -206,6 +281,8 @@ limits:
     agent_path.write_text(template)
 
     console.print(f"[green]✓[/green] Created agent: [cyan]{agent_path}[/cyan]")
+    if model_provider:
+        console.print(f"  Model: [cyan]{model_provider}[/cyan]")
     console.print()
     console.print("Next steps:")
     console.print(f"  1. Edit [cyan]{agent_path}[/cyan] to customize")
@@ -286,14 +363,25 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
     # Determine which session to use
     session = None
     if session_id:
-        # Resume specific session
+        # Resume specific session (with prefix matching)
         session = session_mgr.load_session(agent_name, session_id)
         if not session:
-            console.print(f"[red]Error:[/red] Session '{session_id}' not found")
-            console.print("\nAvailable sessions:")
-            for s in session_mgr.list_sessions(agent_name):
-                console.print(f"  - {s.session_id}: {s.title or '(untitled)'}")
-            sys.exit(1)
+            # Try prefix match
+            all_sessions = session_mgr.list_sessions(agent_name)
+            matches = [s for s in all_sessions if s.session_id.startswith(session_id)]
+            if len(matches) == 1:
+                session = session_mgr.load_session(agent_name, matches[0].session_id)
+            elif len(matches) > 1:
+                console.print(f"[yellow]Ambiguous prefix '{session_id}'. Matches:[/yellow]")
+                for m in matches:
+                    console.print(f"  {m.session_id}: {m.title or '(untitled)'}")
+                sys.exit(1)
+            else:
+                console.print(f"[red]Error:[/red] Session '{session_id}' not found")
+                console.print("\nAvailable sessions:")
+                for s in all_sessions:
+                    console.print(f"  - {s.session_id}: {s.title or '(untitled)'}")
+                sys.exit(1)
     elif not new_session:
         # Try to resume current session
         session = session_mgr.get_current_session(agent_name)
@@ -335,6 +423,10 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
         )
     console.print()
 
+    # Chat state
+    show_tokens = False
+    debug_mode = False
+
     # Chat loop
     while True:
         try:
@@ -362,8 +454,12 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
                         "  /sessions          List all sessions\n"
                         "  /session <id>      Switch to another session\n"
                         "  /new               Start a new session\n"
+                        "  /delete [id]       Delete a session (default: current)\n"
+                        "  /rename <title>    Rename the current session\n"
                         "  /history [n]       Show last n messages (default: 10)\n"
                         "  /context           Show context window usage and status\n"
+                        "  /tokens            Toggle token usage display after each turn\n"
+                        "  /debug [on|off]    Toggle verbose debug mode\n"
                         "  /summarize         Force context summarization\n"
                         "  /export [file]     Export conversation to markdown\n"
                         "  /model [name]      Show or change model\n"
@@ -391,6 +487,7 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
                         table = Table(title="Sessions")
                         table.add_column("ID", style="cyan")
                         table.add_column("Title")
+                        table.add_column("Msgs", style="dim", justify="right")
                         table.add_column("Updated", style="dim")
                         table.add_column("", style="green")
 
@@ -399,7 +496,10 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
                             marker = "← current" if s.session_id == current_id else ""
                             title = s.title or "(untitled)"
                             updated = s.updated_at.strftime("%Y-%m-%d %H:%M")
-                            table.add_row(s.session_id, title, updated, marker)
+                            # Count messages
+                            loaded = session_mgr.load_session(agent_name, s.session_id)
+                            msg_count = str(len(loaded.messages)) if loaded else "?"
+                            table.add_row(s.session_id, title, msg_count, updated, marker)
 
                         console.print(table)
                     continue
@@ -411,6 +511,21 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
 
                     target_id = cmd_parts[1]
                     new_sess = session_mgr.load_session(agent_name, target_id)
+                    if not new_sess:
+                        # Try prefix match
+                        all_sessions = session_mgr.list_sessions(agent_name)
+                        matches = [s for s in all_sessions if s.session_id.startswith(target_id)]
+                        if len(matches) == 1:
+                            target_id = matches[0].session_id
+                            new_sess = session_mgr.load_session(agent_name, target_id)
+                        elif len(matches) > 1:
+                            console.print(f"[yellow]Ambiguous prefix '{target_id}'. Matches:[/yellow]")
+                            for m in matches:
+                                console.print(f"  {m.session_id}: {m.title or '(untitled)'}")
+                            continue
+                        else:
+                            console.print(f"[red]Session '{target_id}' not found[/red]")
+                            continue
                     if not new_sess:
                         console.print(f"[red]Session '{target_id}' not found[/red]")
                         continue
@@ -623,6 +738,79 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
                         console.print(f"Current model: [cyan]{agent.llm.model}[/cyan]")
                     continue
 
+                elif cmd == "tokens":
+                    show_tokens = not show_tokens
+                    state = "on" if show_tokens else "off"
+                    console.print(f"[green]Token display {state}[/green]")
+                    continue
+
+                elif cmd == "debug":
+                    if len(cmd_parts) > 1:
+                        debug_mode = cmd_parts[1].lower() in ("on", "true", "1", "yes")
+                    else:
+                        debug_mode = not debug_mode
+                    state = "on" if debug_mode else "off"
+                    console.print(f"[green]Debug mode {state}[/green]")
+                    if debug_mode:
+                        import logging
+
+                        logging.basicConfig(
+                            level=logging.DEBUG,
+                            format="[%(levelname)s] %(name)s: %(message)s",
+                        )
+                        logging.getLogger("httpx").setLevel(logging.WARNING)
+                        logging.getLogger("httpcore").setLevel(logging.WARNING)
+                        logging.getLogger("litellm").setLevel(logging.INFO)
+                    continue
+
+                elif cmd == "rename":
+                    if len(cmd_parts) < 2:
+                        console.print("[yellow]Usage: /rename <new title>[/yellow]")
+                        continue
+                    new_title = " ".join(cmd_parts[1:])
+                    agent.session.meta.title = new_title
+                    session_mgr._update_meta(agent.session)
+                    console.print(f"[green]Session renamed to \"{new_title}\"[/green]")
+                    continue
+
+                elif cmd == "delete":
+                    target_id = cmd_parts[1] if len(cmd_parts) > 1 else agent.session.meta.session_id
+                    is_current = target_id == agent.session.meta.session_id
+
+                    # Find title for confirmation
+                    target_session = session_mgr.load_session(agent_name, target_id)
+                    if not target_session:
+                        # Try prefix match
+                        all_sessions = session_mgr.list_sessions(agent_name)
+                        matches = [s for s in all_sessions if s.session_id.startswith(target_id)]
+                        if len(matches) == 1:
+                            target_id = matches[0].session_id
+                            is_current = target_id == agent.session.meta.session_id
+                            target_session = session_mgr.load_session(agent_name, target_id)
+                        elif len(matches) > 1:
+                            console.print(f"[yellow]Ambiguous prefix '{target_id}'. Matches:[/yellow]")
+                            for m in matches:
+                                console.print(f"  {m.session_id}: {m.title or '(untitled)'}")
+                            continue
+                        else:
+                            console.print(f"[red]Session '{target_id}' not found[/red]")
+                            continue
+
+                    title = target_session.meta.title or "(untitled)"
+                    if not click.confirm(f"Delete session {target_id} (\"{title}\")?"):
+                        continue
+
+                    session_mgr.delete_session(agent_name, target_id)
+                    console.print(f"[green]Deleted session {target_id}[/green]")
+
+                    if is_current:
+                        # Start a new session since we deleted the current one
+                        agent = Agent(config, session=None, session_manager=session_mgr)
+                        console.print(
+                            f"[green]Started new session {agent.session.meta.session_id}[/green]"
+                        )
+                    continue
+
                 else:
                     console.print(f"[yellow]Unknown command: /{cmd}[/yellow]")
                     continue
@@ -695,6 +883,44 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
                         if collected_response:
                             click.echo("")  # Final newline
 
+                # Show token usage if enabled
+                if show_tokens:
+                    try:
+                        from supyagent.core.tokens import count_tools_tokens
+
+                        conversation_messages = [
+                            m for m in agent.messages if m.get("role") != "system"
+                        ]
+                        status = agent.context_manager.get_trigger_status(
+                            conversation_messages
+                        )
+                        tools_tokens = count_tools_tokens(
+                            agent.tools, agent.context_manager.model
+                        )
+                        ctx_limit = agent.context_manager.context_limit
+                        total = status["total_tokens"] + tools_tokens
+                        pct = int(total / ctx_limit * 100) if ctx_limit else 0
+                        console.print(
+                            f"\n  [dim]tokens: {status['total_tokens']:,} msgs + "
+                            f"{tools_tokens:,} tools | "
+                            f"context: {total:,} / {ctx_limit:,} ({pct}%)[/dim]"
+                        )
+                    except Exception:
+                        pass
+
+                # Show debug info if enabled
+                if debug_mode:
+                    try:
+                        conversation_messages = [
+                            m for m in agent.messages if m.get("role") != "system"
+                        ]
+                        console.print(
+                            f"  [dim][DEBUG] Messages: {len(conversation_messages)} | "
+                            f"Tools: {len(agent.tools)}[/dim]"
+                        )
+                    except Exception:
+                        pass
+
                 console.print()
             except Exception as e:
                 console.print(f"\n[red]Error:[/red] {e}\n")
@@ -710,10 +936,32 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
 @cli.command()
 @click.argument("agent_name")
 @click.option("--search", "-s", "search_query", help="Search sessions by title keyword")
+@click.option("--delete", "-d", "delete_id", help="Delete a specific session by ID (or prefix)")
 @click.option("--delete-all", "delete_all", is_flag=True, help="Delete all sessions for this agent")
-def sessions(agent_name: str, search_query: str | None, delete_all: bool):
+def sessions(agent_name: str, search_query: str | None, delete_id: str | None, delete_all: bool):
     """List all sessions for an agent."""
     session_mgr = SessionManager()
+
+    # Handle single delete
+    if delete_id:
+        # Try exact match first, then prefix
+        result = session_mgr.delete_session(agent_name, delete_id)
+        if not result:
+            all_sessions = session_mgr.list_sessions(agent_name)
+            matches = [s for s in all_sessions if s.session_id.startswith(delete_id)]
+            if len(matches) == 1:
+                session_mgr.delete_session(agent_name, matches[0].session_id)
+                title = matches[0].title or "(untitled)"
+                console.print(f"[green]✓[/green] Deleted session {matches[0].session_id} (\"{title}\")")
+            elif len(matches) > 1:
+                console.print(f"[yellow]Ambiguous prefix '{delete_id}'. Matches:[/yellow]")
+                for m in matches:
+                    console.print(f"  {m.session_id}: {m.title or '(untitled)'}")
+            else:
+                console.print(f"[red]Session '{delete_id}' not found[/red]")
+        else:
+            console.print(f"[green]✓[/green] Deleted session {delete_id}")
+        return
 
     # Handle delete-all
     if delete_all:
@@ -751,6 +999,7 @@ def sessions(agent_name: str, search_query: str | None, delete_all: bool):
     table = Table(title=title_text)
     table.add_column("ID", style="cyan")
     table.add_column("Title")
+    table.add_column("Msgs", style="dim", justify="right")
     table.add_column("Created", style="dim")
     table.add_column("Updated", style="dim")
     table.add_column("", style="green")
@@ -760,7 +1009,10 @@ def sessions(agent_name: str, search_query: str | None, delete_all: bool):
         title = s.title or "(untitled)"
         created = s.created_at.strftime("%Y-%m-%d %H:%M")
         updated = s.updated_at.strftime("%Y-%m-%d %H:%M")
-        table.add_row(s.session_id, title, created, updated, marker)
+        # Count messages
+        loaded = session_mgr.load_session(agent_name, s.session_id)
+        msg_count = str(len(loaded.messages)) if loaded else "?"
+        table.add_row(s.session_id, title, msg_count, created, updated, marker)
 
     console.print(table)
     console.print()
@@ -804,6 +1056,441 @@ def show(agent_name: str):
 
     console.print(f"\n[bold]System Prompt:[/bold]")
     console.print(Panel(config.system_prompt, border_style="dim"))
+
+
+@cli.command()
+@click.argument("agent_name")
+def validate(agent_name: str):
+    """
+    Validate an agent's configuration.
+
+    Checks YAML syntax, required fields, model provider, delegate references,
+    and tool permission patterns.
+
+    \b
+    Examples:
+        supyagent validate myagent
+        supyagent validate planner
+    """
+    agents_dir = Path("agents")
+
+    # Step 1: Check file exists
+    config_path = agents_dir / f"{agent_name}.yaml"
+    if not config_path.exists():
+        console.print(f"[red]  x[/red] File not found: {config_path}")
+        available = [f.stem for f in agents_dir.glob("*.yaml")] if agents_dir.exists() else []
+        if available:
+            console.print(f"    Available agents: {', '.join(available)}")
+        sys.exit(1)
+
+    # Step 2: Parse YAML and Pydantic validation
+    try:
+        config = load_agent_config(agent_name, agents_dir)
+    except AgentConfigError as e:
+        console.print(f"\n[red]  x[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]  x[/red] Failed to parse YAML: {e}")
+        sys.exit(1)
+
+    console.print(f"[green]  ✓[/green] YAML syntax and required fields OK")
+
+    # Step 3: Deep validation
+    issues = validate_agent_config(config, agents_dir)
+
+    if issues:
+        for issue in issues:
+            console.print(f"[yellow]  ![/yellow] {issue}")
+    else:
+        console.print(f"[green]  ✓[/green] Model, delegates, and tools OK")
+
+    # Step 4: Summary
+    console.print(
+        f"\n  Agent: [cyan]{config.name}[/cyan] ({config.type})"
+        f"\n  Model: [cyan]{config.model.provider}[/cyan]"
+        f"\n  Tools: {len(config.tools.allow)} allow, {len(config.tools.deny)} deny"
+    )
+    if config.delegates:
+        console.print(f"  Delegates: {', '.join(config.delegates)}")
+
+    if not issues:
+        console.print(f"\n[green]  All checks passed.[/green]")
+
+
+@cli.command()
+def doctor():
+    """
+    Diagnose your supyagent setup.
+
+    Checks supypowers installation, agents directory, API keys,
+    default tools, sessions directory, and config encryption.
+
+    \b
+    Example:
+        supyagent doctor
+    """
+    all_ok = True
+
+    # 1. Check supypowers
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["supypowers", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            ver = result.stdout.strip()
+            console.print(f"[green]  ✓[/green] supypowers installed ({ver})")
+        else:
+            console.print(f"[red]  x[/red] supypowers not working (exit code {result.returncode})")
+            all_ok = False
+    except FileNotFoundError:
+        console.print("[red]  x[/red] supypowers not installed")
+        console.print("    Install: [cyan]pip install supypowers[/cyan]")
+        all_ok = False
+    except Exception as e:
+        console.print(f"[yellow]  ![/yellow] supypowers check failed: {e}")
+
+    # 2. Check agents directory
+    agents_dir = Path("agents")
+    if agents_dir.exists():
+        agent_files = list(agents_dir.glob("*.yaml"))
+        console.print(f"[green]  ✓[/green] agents/ directory found ({len(agent_files)} agents)")
+    else:
+        console.print("[yellow]  ![/yellow] agents/ directory not found")
+        console.print("    Run: [cyan]supyagent init[/cyan]")
+        all_ok = False
+
+    # 3. Check API keys
+    config_mgr = ConfigManager()
+    stored_keys = config_mgr._load_keys()
+    env_keys = [
+        k for k in os.environ
+        if any(p in k for p in ["API_KEY", "OPENAI", "ANTHROPIC", "OPENROUTER", "GOOGLE", "AZURE"])
+    ]
+
+    if stored_keys or env_keys:
+        key_names = list(stored_keys.keys()) + [k for k in env_keys if k not in stored_keys]
+        console.print(f"[green]  ✓[/green] API keys configured: {', '.join(key_names[:5])}")
+        if len(key_names) > 5:
+            console.print(f"    ... and {len(key_names) - 5} more")
+    else:
+        console.print("[yellow]  ![/yellow] No API keys configured")
+        console.print("    Run: [cyan]supyagent config set[/cyan]")
+        all_ok = False
+
+    # 4. Check agents requiring keys
+    if agents_dir.exists():
+        for agent_file in agents_dir.glob("*.yaml"):
+            try:
+                cfg = load_agent_config(agent_file.stem)
+                provider = cfg.model.provider.lower()
+                needed = None
+                if "anthropic" in provider:
+                    needed = "ANTHROPIC_API_KEY"
+                elif "openai/" in provider:
+                    needed = "OPENAI_API_KEY"
+                elif "openrouter" in provider:
+                    needed = "OPENROUTER_API_KEY"
+                elif "google" in provider or "gemini" in provider:
+                    needed = "GOOGLE_API_KEY"
+
+                if needed and needed not in stored_keys and needed not in os.environ:
+                    console.print(
+                        f"[yellow]  ![/yellow] {agent_file.stem} needs {needed} "
+                        f"(model: {cfg.model.provider})"
+                    )
+                    all_ok = False
+            except Exception:
+                pass
+
+    # 5. Check default tools
+    tools_dir = Path("supypowers")
+    if tools_dir.exists():
+        tool_files = [f for f in tools_dir.glob("*.py") if f.name != "__init__.py"]
+        console.print(f"[green]  ✓[/green] supypowers/ directory found ({len(tool_files)} tools)")
+    else:
+        console.print("[yellow]  ![/yellow] supypowers/ not found (no custom tools)")
+        console.print("    Run: [cyan]supyagent init[/cyan]")
+
+    # 6. Check sessions directory
+    sessions_dir = Path(".supyagent/sessions")
+    if sessions_dir.exists():
+        console.print(f"[green]  ✓[/green] Sessions directory writable")
+    else:
+        console.print(f"[dim]  -[/dim] No sessions yet (will be created on first chat)")
+
+    # 7. Check config encryption
+    config_dir = Path.home() / ".supyagent" / "config"
+    key_file = config_dir / "key.key"
+    if key_file.exists():
+        console.print(f"[green]  ✓[/green] Config encryption working")
+    else:
+        console.print(f"[dim]  -[/dim] Config encryption not yet initialized")
+
+    # Summary
+    if all_ok:
+        console.print(f"\n[green]  All checks passed.[/green]")
+    else:
+        console.print(f"\n[yellow]  Some issues found. See above for fixes.[/yellow]")
+
+
+# =============================================================================
+# Tools Commands
+# =============================================================================
+
+
+@cli.group("tools")
+def tools_group():
+    """Discover and manage supypowers tools."""
+    pass
+
+
+@tools_group.command("list")
+@click.option("--agent", "-a", "agent_name", help="Filter by agent's tool permissions")
+def tools_list(agent_name: str | None):
+    """
+    List all available tools.
+
+    Shows all discovered supypowers tools. Use --agent to see only
+    the tools available to a specific agent after permission filtering.
+
+    \b
+    Examples:
+        supyagent tools list
+        supyagent tools list --agent myagent
+    """
+    from supyagent.core.tools import discover_tools, filter_tools, supypowers_to_openai_tools
+
+    sp_tools = discover_tools()
+
+    if not sp_tools:
+        console.print("[yellow]No tools found.[/yellow]")
+        console.print("Run [cyan]supyagent init[/cyan] to install default tools.")
+        return
+
+    openai_tools = supypowers_to_openai_tools(sp_tools)
+
+    # Filter by agent permissions if specified
+    if agent_name:
+        try:
+            config = load_agent_config(agent_name)
+            openai_tools = filter_tools(openai_tools, config.tools)
+            console.print(f"[dim]Tools available to '{agent_name}':[/dim]\n")
+        except (AgentNotFoundError, AgentConfigError) as e:
+            console.print(f"[red]Error:[/red] {e}")
+            sys.exit(1)
+    else:
+        console.print("[dim]All discovered tools:[/dim]\n")
+
+    table = Table()
+    table.add_column("Tool", style="cyan")
+    table.add_column("Description")
+
+    for tool in openai_tools:
+        func = tool.get("function", {})
+        name = func.get("name", "unknown")
+        desc = func.get("description", "")
+        # Truncate long descriptions
+        if len(desc) > 70:
+            desc = desc[:67] + "..."
+        table.add_row(name, desc)
+
+    console.print(table)
+    console.print(f"\n[dim]{len(openai_tools)} tools total[/dim]")
+
+
+@tools_group.command("new")
+@click.argument("name")
+def tools_new(name: str):
+    """
+    Create a new tool from template.
+
+    NAME is the tool name (will create supypowers/NAME.py).
+
+    \b
+    Example:
+        supyagent tools new github_api
+    """
+    tools_dir = Path("supypowers")
+    if not tools_dir.exists():
+        console.print("[yellow]supypowers/ directory not found.[/yellow]")
+        console.print("Run [cyan]supyagent init[/cyan] first.")
+        return
+
+    tool_path = tools_dir / f"{name}.py"
+    if tool_path.exists():
+        if not click.confirm(f"Tool '{name}' already exists. Overwrite?"):
+            return
+
+    # Generate class names from tool name
+    class_name = "".join(w.capitalize() for w in name.split("_"))
+
+    template = f'''# /// script
+# dependencies = ["pydantic"]
+# ///
+"""
+{name} - Custom supypowers tool.
+"""
+from pydantic import BaseModel, Field
+
+
+class {class_name}Input(BaseModel):
+    """{class_name} input parameters."""
+    value: str = Field(..., description="Input value")
+
+
+class {class_name}Output(BaseModel):
+    """{class_name} output."""
+    ok: bool
+    data: str | None = None
+    error: str | None = None
+
+
+def {name}(input: {class_name}Input) -> {class_name}Output:
+    """
+    Describe what this tool does.
+
+    Examples:
+        >>> {name}({{"value": "test"}})
+    """
+    try:
+        # Your implementation here
+        return {class_name}Output(ok=True, data=f"Processed: {{input.value}}")
+    except Exception as e:
+        return {class_name}Output(ok=False, error=str(e))
+'''
+
+    tool_path.write_text(template)
+    console.print(f"[green]  ✓[/green] Created [cyan]{tool_path}[/cyan]")
+    console.print(f"\n  The tool will be available as [cyan]{name}__<function_name>[/cyan]")
+    console.print(f"  Edit the file to add your implementation.")
+
+
+@tools_group.command("test")
+@click.argument("tool_name")
+@click.argument("args_json", default="{}")
+@click.option("--secrets", "-s", multiple=True, help="Secrets as KEY=VALUE or .env file")
+def tools_test(tool_name: str, args_json: str, secrets: tuple[str, ...]):
+    """
+    Test a tool outside of an agent.
+
+    TOOL_NAME is the full tool name (e.g., shell__run_command).
+    ARGS_JSON is a JSON string of arguments.
+
+    \b
+    Examples:
+        supyagent tools test shell__run_command '{"command": "echo hello"}'
+        supyagent tools test files__read_file '{"path": "README.md"}'
+    """
+    from supyagent.core.tools import execute_tool
+
+    if "__" not in tool_name:
+        console.print(f"[red]Error:[/red] Tool name must be in 'script__function' format")
+        console.print(f"  Example: shell__run_command, files__read_file")
+        sys.exit(1)
+
+    script, func = tool_name.split("__", 1)
+
+    try:
+        args = json.loads(args_json)
+    except json.JSONDecodeError as e:
+        console.print(f"[red]Error:[/red] Invalid JSON arguments: {e}")
+        sys.exit(1)
+
+    secrets_dict = parse_secrets(secrets)
+
+    console.print(f"[dim]Running {tool_name}...[/dim]")
+    result = execute_tool(script, func, args, secrets=secrets_dict)
+
+    if result.get("ok"):
+        console.print(f"[green]  ✓[/green] ok: true")
+        data = result.get("data")
+        if data is not None:
+            if isinstance(data, str) and len(data) > 200:
+                console.print(f"  data: {data[:200]}...")
+            else:
+                console.print(f"  data: {json.dumps(data, indent=2) if not isinstance(data, str) else data}")
+    else:
+        console.print(f"[red]  x[/red] ok: false")
+        console.print(f"  error: {result.get('error', 'unknown')}")
+        if result.get("error_type"):
+            console.print(f"  error_type: {result['error_type']}")
+
+    if result.get("duration_ms"):
+        console.print(f"  duration: {result['duration_ms']}ms")
+
+
+@cli.command()
+def schema():
+    """
+    Show the full agent configuration schema.
+
+    Displays all available YAML fields, their types, defaults, and descriptions.
+    Use this as a reference when writing agent configuration files.
+    """
+    from supyagent.models.agent_config import (
+        AgentConfig,
+        ContextSettings,
+        ModelConfig,
+        SupervisorSettings,
+        ToolPermissions,
+    )
+
+    def _print_model(model_cls: type, indent: int = 0) -> None:
+        prefix = "  " * indent
+        for name, field in model_cls.model_fields.items():
+            field_type = str(field.annotation).replace("typing.", "")
+            # Simplify common types
+            for old, new in [
+                ("list[str]", "list[str]"),
+                ("<class 'str'>", "str"),
+                ("<class 'int'>", "int"),
+                ("<class 'float'>", "float"),
+                ("<class 'bool'>", "bool"),
+            ]:
+                field_type = field_type.replace(old, new)
+
+            default = field.default
+            if default is not None and str(default) != "PydanticUndefined":
+                default_str = f" [dim](default: {default})[/dim]"
+            elif str(default) == "PydanticUndefined":
+                default_str = " [red](required)[/red]"
+            else:
+                default_str = ""
+
+            desc = ""
+            if field.description:
+                desc = f"\n{prefix}    [dim]# {field.description}[/dim]"
+
+            console.print(f"{prefix}  [cyan]{name}[/cyan]{default_str}{desc}")
+
+    console.print("\n[bold]Agent Configuration Schema[/bold]\n")
+
+    console.print("[bold]Top-level fields:[/bold]")
+    _print_model(AgentConfig)
+
+    console.print(f"\n[bold]model:[/bold]")
+    _print_model(ModelConfig, indent=1)
+
+    console.print(f"\n[bold]tools:[/bold]")
+    _print_model(ToolPermissions, indent=1)
+
+    console.print(f"\n[bold]context:[/bold]")
+    _print_model(ContextSettings, indent=1)
+
+    console.print(f"\n[bold]supervisor:[/bold]")
+    _print_model(SupervisorSettings, indent=1)
+
+    console.print(f"\n[bold]limits (dict):[/bold]")
+    console.print("    [cyan]max_tool_calls_per_turn[/cyan] [dim](default: 20)[/dim]")
+    console.print("      [dim]# Max tool calls per user message[/dim]")
+    console.print("    [cyan]circuit_breaker_threshold[/cyan] [dim](default: 3)[/dim]")
+    console.print("      [dim]# Block a tool after N consecutive failures[/dim]")
+    console.print()
 
 
 def parse_secrets(secrets: tuple[str, ...]) -> dict[str, str]:

@@ -245,3 +245,153 @@ class TestChatWithFlags:
 
         assert result.exit_code == 1
         assert "not found" in result.output
+
+
+class TestValidateCommand:
+    """Tests for 'supyagent validate' command."""
+
+    def test_validate_valid_agent(self, isolated_runner):
+        """Test validating a valid agent."""
+        isolated_runner.invoke(cli, ["new", "myagent"])
+        result = isolated_runner.invoke(cli, ["validate", "myagent"])
+        assert result.exit_code == 0
+        assert "YAML syntax and required fields OK" in result.output
+
+    def test_validate_nonexistent_agent(self, isolated_runner):
+        """Test validating a non-existent agent."""
+        Path("agents").mkdir(exist_ok=True)
+        result = isolated_runner.invoke(cli, ["validate", "nonexistent"])
+        assert result.exit_code == 1
+        assert "not found" in result.output
+
+    def test_validate_invalid_agent(self, isolated_runner):
+        """Test validating an agent with missing fields."""
+        Path("agents").mkdir(exist_ok=True)
+        Path("agents/broken.yaml").write_text("name: broken\n")
+        result = isolated_runner.invoke(cli, ["validate", "broken"])
+        assert result.exit_code == 1
+        assert "model is required" in result.output
+
+
+class TestDoctorCommand:
+    """Tests for 'supyagent doctor' command."""
+
+    def test_doctor_basic(self, isolated_runner):
+        """Test doctor runs without error."""
+        result = isolated_runner.invoke(cli, ["doctor"])
+        assert result.exit_code == 0
+        # Should show at least some checks
+        assert "agents/" in result.output
+
+
+class TestSchemaCommand:
+    """Tests for 'supyagent schema' command."""
+
+    def test_schema(self, runner):
+        """Test schema displays config fields."""
+        result = runner.invoke(cli, ["schema"])
+        assert result.exit_code == 0
+        assert "Agent Configuration Schema" in result.output
+        assert "model:" in result.output
+        assert "tools:" in result.output
+        assert "context:" in result.output
+        assert "supervisor:" in result.output
+
+
+class TestNewCommandExtended:
+    """Tests for 'supyagent new' with --model and --from flags."""
+
+    def test_new_with_model(self, isolated_runner):
+        """Test creating agent with custom model."""
+        result = isolated_runner.invoke(
+            cli, ["new", "myagent", "--model", "openrouter/google/gemini-2.5-flash"]
+        )
+        assert result.exit_code == 0
+        content = Path("agents/myagent.yaml").read_text()
+        assert "openrouter/google/gemini-2.5-flash" in content
+
+    def test_new_with_from(self, isolated_runner):
+        """Test cloning from existing agent."""
+        # Create source agent
+        isolated_runner.invoke(cli, ["new", "source"])
+        # Clone it
+        result = isolated_runner.invoke(cli, ["new", "clone", "--from", "source"])
+        assert result.exit_code == 0
+        assert "cloned from source" in result.output
+        content = Path("agents/clone.yaml").read_text()
+        assert "clone" in content
+
+    def test_new_from_nonexistent(self, isolated_runner):
+        """Test cloning from non-existent agent."""
+        Path("agents").mkdir(exist_ok=True)
+        result = isolated_runner.invoke(cli, ["new", "clone", "--from", "nonexistent"])
+        assert result.exit_code == 0  # Click doesn't exit with 1 here
+        assert "not found" in result.output
+
+    def test_new_with_from_and_model(self, isolated_runner):
+        """Test cloning with model override."""
+        isolated_runner.invoke(cli, ["new", "source"])
+        result = isolated_runner.invoke(
+            cli, ["new", "clone", "--from", "source", "--model", "openai/gpt-4o"]
+        )
+        assert result.exit_code == 0
+        content = Path("agents/clone.yaml").read_text()
+        assert "openai/gpt-4o" in content
+
+
+class TestToolsCommands:
+    """Tests for 'supyagent tools' command group."""
+
+    def test_tools_list_no_tools(self, isolated_runner):
+        """Test listing tools when no supypowers dir exists."""
+        result = isolated_runner.invoke(cli, ["tools", "list"])
+        assert result.exit_code == 0
+        assert "No tools found" in result.output
+
+    def test_tools_new(self, isolated_runner):
+        """Test creating a new tool."""
+        Path("supypowers").mkdir()
+        result = isolated_runner.invoke(cli, ["tools", "new", "my_tool"])
+        assert result.exit_code == 0
+        assert "Created" in result.output
+        assert Path("supypowers/my_tool.py").exists()
+
+        content = Path("supypowers/my_tool.py").read_text()
+        assert "class MyToolInput" in content
+        assert "class MyToolOutput" in content
+        assert "def my_tool" in content
+
+    def test_tools_new_no_dir(self, isolated_runner):
+        """Test creating a tool when supypowers dir doesn't exist."""
+        result = isolated_runner.invoke(cli, ["tools", "new", "my_tool"])
+        assert result.exit_code == 0
+        assert "not found" in result.output
+
+
+class TestSessionsCommandExtended:
+    """Tests for extended sessions command features."""
+
+    def test_sessions_delete_all_empty(self, isolated_runner):
+        """Test delete-all with no sessions."""
+        isolated_runner.invoke(cli, ["new", "myagent"])
+        result = isolated_runner.invoke(cli, ["sessions", "myagent", "--delete-all"])
+        assert result.exit_code == 0
+        assert "No sessions to delete" in result.output
+
+    def test_sessions_search_no_results(self, isolated_runner):
+        """Test search with no matching sessions."""
+        isolated_runner.invoke(cli, ["new", "myagent"])
+        result = isolated_runner.invoke(
+            cli, ["sessions", "myagent", "--search", "nonexistent"]
+        )
+        assert result.exit_code == 0
+        assert "No sessions matching" in result.output
+
+    def test_sessions_delete_nonexistent(self, isolated_runner):
+        """Test deleting a non-existent session."""
+        isolated_runner.invoke(cli, ["new", "myagent"])
+        result = isolated_runner.invoke(
+            cli, ["sessions", "myagent", "--delete", "nonexistent"]
+        )
+        assert result.exit_code == 0
+        assert "not found" in result.output

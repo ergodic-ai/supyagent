@@ -85,8 +85,11 @@ class ExecutionRunner(BaseAgentEngine):
             except json.JSONDecodeError:
                 cred_name = "unknown"
             raise CredentialRequiredError(
-                f"Credential '{cred_name}' required but not provided. "
-                f"Pass it via --secrets {cred_name}=<value>"
+                f"Credential '{cred_name}' required but not provided.\n\n"
+                f"Fix: supyagent run <agent> \"task\" --secrets {cred_name}=<value>\n"
+                f" or: supyagent run <agent> \"task\" --secrets .env\n\n"
+                f"You can also store it globally:\n"
+                f"  supyagent config set {cred_name}"
             )
         return super()._dispatch_tool_call(tool_call)
 

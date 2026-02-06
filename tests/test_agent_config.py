@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from supyagent.models.agent_config import (
     AgentConfig,
+    AgentConfigError,
     AgentNotFoundError,
     ModelConfig,
     ToolPermissions,
@@ -179,12 +180,16 @@ class TestLoadAgentConfig:
             load_agent_config("invalid", agents_dir)
 
     def test_load_missing_required_fields(self, agents_dir):
-        """Test loading YAML with missing required fields."""
+        """Test loading YAML with missing required fields raises AgentConfigError."""
         agent_file = agents_dir / "incomplete.yaml"
         agent_file.write_text("""
 name: incomplete
 # Missing model and system_prompt
 """)
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(AgentConfigError) as exc_info:
             load_agent_config("incomplete", agents_dir)
+
+        # Should contain friendly error messages
+        assert "model is required" in str(exc_info.value)
+        assert "system_prompt is required" in str(exc_info.value)

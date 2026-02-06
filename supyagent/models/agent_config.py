@@ -2,11 +2,16 @@
 Agent configuration models.
 """
 
+from __future__ import annotations
+
+import logging
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+
+logger = logging.getLogger(__name__)
 
 
 class ModelConfig(BaseModel):
@@ -288,6 +293,100 @@ class AgentNotFoundError(Exception):
         super().__init__(f"Agent '{name}' not found. Check agents/ directory.")
 
 
+class AgentConfigError(Exception):
+    """Raised when an agent configuration is invalid, with a user-friendly message."""
+
+    def __init__(self, name: str, issues: list[str]):
+        self.name = name
+        self.issues = issues
+        msg = f"Invalid configuration for agent '{name}':\n" + "\n".join(
+            f"  - {issue}" for issue in issues
+        )
+        super().__init__(msg)
+
+
+def _friendly_validation_errors(name: str, exc: ValidationError) -> AgentConfigError:
+    """Convert Pydantic ValidationError to a user-friendly AgentConfigError."""
+    issues: list[str] = []
+    for error in exc.errors():
+        loc = ".".join(str(x) for x in error["loc"])
+        msg = error["msg"]
+        err_type = error["type"]
+
+        if err_type == "missing":
+            hint = ""
+            if loc == "model.provider":
+                hint = " (e.g., 'anthropic/claude-3-5-sonnet-20241022' or 'openrouter/google/gemini-2.5-flash')"
+            elif loc == "system_prompt":
+                hint = " (multi-line string starting with '|' in YAML)"
+            elif loc == "name":
+                hint = " (1-50 characters)"
+            issues.append(f"{loc} is required{hint}")
+        elif "less_than_or_equal" in err_type or "greater_than" in err_type:
+            issues.append(f"{loc}: {msg}")
+        elif err_type == "string_too_short":
+            issues.append(f"{loc} cannot be empty")
+        elif err_type == "literal_error":
+            allowed = error.get("ctx", {}).get("expected", "")
+            issues.append(f"{loc}: must be one of {allowed}")
+        else:
+            issues.append(f"{loc}: {msg}")
+
+    return AgentConfigError(name, issues)
+
+
+def validate_agent_config(
+    config: AgentConfig,
+    agents_dir: Path | None = None,
+) -> list[str]:
+    """
+    Validate an agent configuration beyond Pydantic type checks.
+
+    Checks:
+    - Model provider is recognized by litellm
+    - Delegate names reference existing agent files
+    - Tool permission patterns are non-empty strings
+
+    Args:
+        config: Validated AgentConfig to check
+        agents_dir: Directory containing agent YAML files
+
+    Returns:
+        List of warning/issue strings (empty = all good)
+    """
+    if agents_dir is None:
+        agents_dir = Path("agents")
+
+    issues: list[str] = []
+
+    # Check model provider
+    try:
+        import litellm
+
+        litellm.get_model_info(config.model.provider)
+    except Exception:
+        # Not fatal — could be a custom endpoint or unknown model
+        issues.append(
+            f"model.provider: '{config.model.provider}' not recognized by litellm. "
+            "It may still work if you have a custom endpoint configured."
+        )
+
+    # Check delegates exist
+    for delegate in config.delegates:
+        delegate_path = agents_dir / f"{delegate}.yaml"
+        if not delegate_path.exists():
+            available = [f.stem for f in agents_dir.glob("*.yaml")] if agents_dir.exists() else []
+            hint = f" Available: {', '.join(available)}" if available else ""
+            issues.append(f"delegates: '{delegate}' not found in {agents_dir}/.{hint}")
+
+    # Check tool patterns are valid
+    for pattern in config.tools.allow + config.tools.deny:
+        if not pattern or not isinstance(pattern, str):
+            issues.append(f"tools: empty or invalid pattern found in allow/deny list")
+
+    return issues
+
+
 def load_agent_config(name: str, agents_dir: Path | None = None) -> AgentConfig:
     """
     Load and validate an agent configuration from YAML.
@@ -301,7 +400,7 @@ def load_agent_config(name: str, agents_dir: Path | None = None) -> AgentConfig:
 
     Raises:
         AgentNotFoundError: If agent YAML doesn't exist
-        ValidationError: If YAML is invalid
+        AgentConfigError: If YAML is invalid (with friendly messages)
     """
     if agents_dir is None:
         agents_dir = Path("agents")
@@ -314,4 +413,10 @@ def load_agent_config(name: str, agents_dir: Path | None = None) -> AgentConfig:
     with open(config_path) as f:
         data = yaml.safe_load(f)
 
-    return AgentConfig(**data)
+    if data is None:
+        raise AgentConfigError(name, ["YAML file is empty"])
+
+    try:
+        return AgentConfig(**data)
+    except ValidationError as e:
+        raise _friendly_validation_errors(name, e) from e
