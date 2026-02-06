@@ -1271,7 +1271,7 @@ class TestExecutionRunnerDelegation:
         """ExecutionRunner should include delegation tools if agent has delegates."""
         config = _make_config("runner", agent_type="execution", delegates=["worker"])
 
-        with patch("supyagent.core.executor.discover_tools", return_value=[]), \
+        with patch("supyagent.core.engine.discover_tools", return_value=[]), \
              patch("supyagent.core.delegation.load_agent_config") as mock_load:
             mock_load.return_value = _make_config("worker", agent_type="execution")
 
@@ -1286,7 +1286,7 @@ class TestExecutionRunnerDelegation:
         """ExecutionRunner should always include process management tools."""
         config = _make_config("runner", agent_type="execution", delegates=[])
 
-        with patch("supyagent.core.executor.discover_tools", return_value=[]):
+        with patch("supyagent.core.engine.discover_tools", return_value=[]):
             from supyagent.core.executor import ExecutionRunner
             runner = ExecutionRunner(config)
 
@@ -1299,7 +1299,7 @@ class TestExecutionRunnerDelegation:
         """ExecutionRunner without delegates should have no delegation tools."""
         config = _make_config("runner", agent_type="execution", delegates=[])
 
-        with patch("supyagent.core.executor.discover_tools", return_value=[]):
+        with patch("supyagent.core.engine.discover_tools", return_value=[]):
             from supyagent.core.executor import ExecutionRunner
             runner = ExecutionRunner(config)
 

@@ -72,7 +72,7 @@ def mock_llm_json_response():
 class TestExecutionRunnerInit:
     """Tests for ExecutionRunner initialization."""
 
-    @patch("supyagent.core.executor.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_init_no_tools(self, mock_discover, execution_agent_config, temp_dir):
         """Test initialization with no supypowers tools (but process tools always present)."""
         mock_discover.return_value = []
@@ -88,7 +88,7 @@ class TestExecutionRunnerInit:
         assert "kill_process" in tool_names
         mock_discover.assert_not_called()  # No tools allowed, so no discovery
 
-    @patch("supyagent.core.executor.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_init_with_tools(self, mock_discover, execution_agent_config_with_tools):
         """Test initialization with tools allowed."""
         mock_discover.return_value = [
@@ -104,7 +104,7 @@ class TestExecutionRunnerInit:
 class TestExecutionRunnerRun:
     """Tests for ExecutionRunner.run()."""
 
-    @patch("supyagent.core.executor.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_run_simple_string_task(
         self, mock_discover, execution_agent_config, mock_llm_response
     ):
@@ -119,7 +119,7 @@ class TestExecutionRunnerRun:
         assert result["ok"] is True
         assert result["data"] == "This is the summarized output."
 
-    @patch("supyagent.core.executor.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_run_dict_task(
         self, mock_discover, execution_agent_config, mock_llm_response
     ):
@@ -133,7 +133,7 @@ class TestExecutionRunnerRun:
 
         assert result["ok"] is True
 
-    @patch("supyagent.core.executor.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_run_with_secrets(
         self, mock_discover, execution_agent_config, mock_llm_response
     ):
@@ -150,7 +150,7 @@ class TestExecutionRunnerRun:
 
         assert result["ok"] is True
 
-    @patch("supyagent.core.executor.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_run_json_output_format(
         self, mock_discover, execution_agent_config, mock_llm_json_response
     ):
@@ -166,7 +166,7 @@ class TestExecutionRunnerRun:
         assert isinstance(result["data"], dict)
         assert result["data"]["summary"] == "Test summary"
 
-    @patch("supyagent.core.executor.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_run_markdown_output_format(
         self, mock_discover, execution_agent_config, mock_llm_response
     ):
@@ -185,7 +185,7 @@ class TestExecutionRunnerRun:
 class TestExecutionRunnerCredentialRequest:
     """Tests for credential request handling in execution mode."""
 
-    @patch("supyagent.core.executor.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_credential_request_fails(
         self, mock_discover, execution_agent_config_with_tools
     ):
@@ -217,8 +217,8 @@ class TestExecutionRunnerCredentialRequest:
 class TestExecutionRunnerToolExecution:
     """Tests for tool execution in execution mode."""
 
-    @patch("supyagent.core.executor.discover_tools")
-    @patch("supyagent.core.executor.execute_tool")
+    @patch("supyagent.core.engine.discover_tools")
+    @patch("supyagent.core.engine.execute_tool")
     def test_tool_execution(
         self, mock_execute, mock_discover, execution_agent_config_with_tools
     ):
@@ -259,7 +259,7 @@ class TestExecutionRunnerToolExecution:
 class TestOutputFormatting:
     """Tests for output formatting."""
 
-    @patch("supyagent.core.executor.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_json_in_code_block(self, mock_discover, execution_agent_config):
         """Test extracting JSON from markdown code block."""
         mock_discover.return_value = []
@@ -282,7 +282,7 @@ class TestOutputFormatting:
         assert result["data"]["key"] == "value"
         assert result["data"]["number"] == 42
 
-    @patch("supyagent.core.executor.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_non_json_with_json_format(self, mock_discover, execution_agent_config):
         """Test non-JSON content with JSON format returns as-is."""
         mock_discover.return_value = []
@@ -304,7 +304,7 @@ class TestOutputFormatting:
 class TestMaxIterations:
     """Tests for max iterations safety."""
 
-    @patch("supyagent.core.executor.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_max_iterations_exceeded(self, mock_discover, execution_agent_config_with_tools):
         """Test that max iterations is enforced."""
         mock_discover.return_value = []
@@ -326,7 +326,7 @@ class TestMaxIterations:
         response.choices[0].message.tool_calls = [tool_call]
 
         with patch.object(runner.llm, "chat", return_value=response):
-            with patch("supyagent.core.executor.execute_tool", return_value={"ok": True}):
+            with patch("supyagent.core.engine.execute_tool", return_value={"ok": True}):
                 result = runner.run("Keep calling tools")
 
         assert result["ok"] is False

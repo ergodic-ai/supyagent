@@ -16,6 +16,13 @@ from rich.table import Table
 
 from typing import Any
 
+try:
+    from importlib.metadata import version as pkg_version
+
+    _version = pkg_version("supyagent")
+except Exception:
+    _version = "0.2.7"
+
 from supyagent.core.agent import Agent
 from supyagent.core.config import ConfigManager, load_config
 from supyagent.core.executor import ExecutionRunner
@@ -29,7 +36,7 @@ console_err = Console(stderr=True)
 
 
 @click.group()
-@click.version_option(version="0.2.6", prog_name="supyagent")
+@click.version_option(version=_version, prog_name="supyagent")
 def cli():
     """
     Supyagent - LLM agents powered by supypowers.
@@ -1008,13 +1015,19 @@ def run(
     type=click.Choice(["json", "text"]),
     default="json",
 )
-@click.option("--timeout", type=float, default=300, help="Max execution time in seconds")
+@click.option(
+    "--timeout", type=float, default=300, help="Max execution time in seconds"
+)
+@click.option(
+    "--depth", type=int, default=0, help="Delegation depth (set by parent agent)"
+)
 def exec_agent(
     agent_name: str,
     task: str,
     context: str,
     output_fmt: str,
     timeout: float,
+    depth: int,
 ):
     """
     Execute an agent as a subprocess (used internally for delegation).
@@ -1027,6 +1040,23 @@ def exec_agent(
         supyagent exec researcher --task "Find papers on AI"
         supyagent exec summarizer --task "Summarize this text" --output json
     """
+    # Enforce delegation depth limit
+    from supyagent.core.registry import AgentRegistry
+
+    if depth > AgentRegistry.MAX_DEPTH:
+        error_msg = (
+            f"Maximum delegation depth ({AgentRegistry.MAX_DEPTH}) exceeded "
+            f"(depth={depth}). Cannot delegate further."
+        )
+        if output_fmt == "json":
+            click.echo(json.dumps({"ok": False, "error": error_msg}))
+        else:
+            console_err.print(f"[red]Error:[/red] {error_msg}")
+        sys.exit(1)
+
+    # Set depth in environment so child agents can read it
+    os.environ["SUPYAGENT_DELEGATION_DEPTH"] = str(depth)
+
     # Load global config (API keys) into environment
     load_config()
 
@@ -1045,7 +1075,9 @@ def exec_agent(
         config = load_agent_config(agent_name)
     except AgentNotFoundError:
         if output_fmt == "json":
-            click.echo(json.dumps({"ok": False, "error": f"Agent '{agent_name}' not found"}))
+            click.echo(
+                json.dumps({"ok": False, "error": f"Agent '{agent_name}' not found"})
+            )
         else:
             console_err.print(f"[red]Error:[/red] Agent '{agent_name}' not found")
         sys.exit(1)
@@ -1069,7 +1101,9 @@ def exec_agent(
             if result.get("ok"):
                 click.echo(result.get("data", ""))
             else:
-                console_err.print(f"[red]Error:[/red] {result.get('error', 'Unknown error')}")
+                console_err.print(
+                    f"[red]Error:[/red] {result.get('error', 'Unknown error')}"
+                )
                 sys.exit(1)
 
     except Exception as e:
@@ -1368,7 +1402,9 @@ def process():
 
 
 @process.command("list")
-@click.option("--all", "-a", "include_all", is_flag=True, help="Include completed processes")
+@click.option(
+    "--all", "-a", "include_all", is_flag=True, help="Include completed processes"
+)
 def process_list(include_all: bool):
     """List running background processes."""
     from supyagent.core.supervisor import get_supervisor
@@ -1401,6 +1437,7 @@ def process_list(include_all: bool):
         if started:
             try:
                 from datetime import datetime
+
                 dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
                 started = dt.strftime("%H:%M:%S")
             except (ValueError, AttributeError):

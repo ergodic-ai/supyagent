@@ -12,6 +12,7 @@ Supports two execution modes:
 from __future__ import annotations
 
 import json
+import os
 from typing import TYPE_CHECKING, Any
 
 from supyagent.core.context import DelegationContext, summarize_conversation
@@ -299,6 +300,10 @@ class DelegationManager:
         """Delegate via subprocess using the ProcessSupervisor."""
         from supyagent.core.supervisor import get_supervisor, run_supervisor_coroutine
 
+        # Calculate child depth: current cross-process depth + in-process depth + 1
+        current_depth = int(os.environ.get("SUPYAGENT_DELEGATION_DEPTH", "0"))
+        child_depth = current_depth + self.registry.get_depth(self.parent_id) + 1
+
         cmd = [
             "supyagent", "exec", agent_name,
             "--task", full_task,
@@ -308,6 +313,7 @@ class DelegationManager:
                 "conversation_summary": context.conversation_summary,
                 "relevant_facts": context.relevant_facts,
             }),
+            "--depth", str(child_depth),
             "--output", "json",
         ]
 

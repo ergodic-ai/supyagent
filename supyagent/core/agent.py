@@ -1,7 +1,8 @@
 """
-Core Agent class.
+Core Agent class for interactive mode.
 
-The Agent handles the conversation loop, tool execution, and message management.
+Extends BaseAgentEngine with session persistence, credential prompting,
+and context-managed conversation history.
 """
 
 from __future__ import annotations
@@ -10,18 +11,11 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from supyagent.core.context_manager import ContextManager
 from supyagent.core.credentials import CredentialManager
-from supyagent.core.llm import LLMClient
+from supyagent.core.context_manager import ContextManager
+from supyagent.core.engine import BaseAgentEngine, MaxIterationsError
 from supyagent.core.session_manager import SessionManager
-from supyagent.core.tools import (
-    REQUEST_CREDENTIAL_TOOL,
-    discover_tools,
-    execute_tool,
-    filter_tools,
-    is_credential_request,
-    supypowers_to_openai_tools,
-)
+from supyagent.core.tools import REQUEST_CREDENTIAL_TOOL, is_credential_request
 from supyagent.models.agent_config import AgentConfig, get_full_system_prompt
 from supyagent.models.session import Message, Session
 
@@ -30,7 +24,7 @@ if TYPE_CHECKING:
     from supyagent.core.registry import AgentRegistry
 
 
-class Agent:
+class Agent(BaseAgentEngine):
     """
     An LLM agent that can use supypowers tools.
 
@@ -52,25 +46,7 @@ class Agent:
         registry: "AgentRegistry | None" = None,
         parent_instance_id: str | None = None,
     ):
-        """
-        Initialize an agent from configuration.
-
-        Args:
-            config: Agent configuration
-            session: Optional existing session to resume
-            session_manager: Optional session manager (creates one if not provided)
-            credential_manager: Optional credential manager (creates one if not provided)
-            registry: Optional agent registry for multi-agent support
-            parent_instance_id: Instance ID of parent agent (if this is a sub-agent)
-        """
-        self.config = config
-
-        # Initialize LLM client
-        self.llm = LLMClient(
-            model=config.model.provider,
-            temperature=config.model.temperature,
-            max_tokens=config.model.max_tokens,
-        )
+        super().__init__(config)
 
         # Initialize session management
         self.session_manager = session_manager or SessionManager()
@@ -78,26 +54,12 @@ class Agent:
         # Initialize credential management
         self.credential_manager = credential_manager or CredentialManager()
 
-        # Initialize multi-agent support
-        self.instance_id: str | None = None
-        self.delegation_mgr: "DelegationManager | None" = None
-
-        if config.delegates:
-            # Lazy import to avoid circular dependency
-            from supyagent.core.delegation import DelegationManager
-            from supyagent.core.registry import AgentRegistry
-
-            self.registry = registry or AgentRegistry()
-            self.delegation_mgr = DelegationManager(
-                self.registry,
-                self,
-                grandparent_instance_id=parent_instance_id,
-            )
-            self.instance_id = self.delegation_mgr.parent_id
-        else:
+        # Set up multi-agent delegation
+        self._setup_delegation(registry, parent_instance_id)
+        if not self.registry:
             self.registry = registry
 
-        # Load available tools (including delegation tools)
+        # Load available tools (base + credential request tool)
         self.tools = self._load_tools()
 
         # Initialize session
@@ -108,7 +70,7 @@ class Agent:
             self.session = self.session_manager.create_session(
                 config.name, config.model.provider
             )
-            self.messages: list[dict[str, Any]] = [
+            self.messages = [
                 {"role": "system", "content": get_full_system_prompt(config)}
             ]
 
@@ -131,48 +93,32 @@ class Agent:
         )
 
     def _load_tools(self) -> list[dict[str, Any]]:
-        """
-        Discover and filter available tools.
-
-        Returns:
-            List of tools in OpenAI function calling format
-        """
-        tools: list[dict[str, Any]] = []
-
-        # Discover tools from supypowers
-        sp_tools = discover_tools()
-
-        # Convert to OpenAI format
-        openai_tools = supypowers_to_openai_tools(sp_tools)
-
-        # Filter by permissions
-        filtered = filter_tools(openai_tools, self.config.tools)
-        tools.extend(filtered)
-
-        # Always add the credential request tool
+        """Load base tools plus the credential request tool."""
+        tools = self._load_base_tools()
         tools.append(REQUEST_CREDENTIAL_TOOL)
-
-        # Add delegation tools if this agent can delegate
-        if self.delegation_mgr:
-            tools.extend(self.delegation_mgr.get_delegation_tools())
-
-        # Add process management tools (for managing background processes)
-        from supyagent.core.process_tools import get_process_management_tools
-
-        tools.extend(get_process_management_tools())
-
         return tools
 
+    def _get_secrets(self) -> dict[str, str]:
+        """Get secrets from credential manager."""
+        return self.credential_manager.get_all_for_tools(self.config.name)
+
+    def _build_messages_for_llm(self) -> list[dict[str, Any]]:
+        """Apply context trimming via ContextManager."""
+        system_prompt = get_full_system_prompt(self.config)
+        conversation_messages = [m for m in self.messages if m.get("role") != "system"]
+        return self.context_manager.build_messages_for_llm(
+            system_prompt,
+            conversation_messages,
+        )
+
+    def _dispatch_tool_call(self, tool_call: Any) -> dict[str, Any]:
+        """Handle credential requests, then delegate to base dispatch."""
+        if is_credential_request(tool_call):
+            return self._handle_credential_request(tool_call)
+        return super()._dispatch_tool_call(tool_call)
+
     def _reconstruct_messages(self, session: Session) -> list[dict[str, Any]]:
-        """
-        Reconstruct LLM message format from session history.
-
-        Args:
-            session: Session with message history
-
-        Returns:
-            List of messages in OpenAI format
-        """
+        """Reconstruct LLM message format from session history."""
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": get_full_system_prompt(self.config)}
         ]
@@ -194,25 +140,6 @@ class Agent:
 
         return messages
 
-    def _get_messages_for_llm(self) -> list[dict[str, Any]]:
-        """
-        Get messages to send to LLM, managed for context limits.
-
-        Uses the ContextManager to build an optimized message list that:
-        - Includes the system prompt
-        - Includes a summary of older messages (if available)
-        - Includes recent messages that fit in the context window
-        """
-        system_prompt = get_full_system_prompt(self.config)
-
-        # Filter out system messages from history (we add it fresh)
-        conversation_messages = [m for m in self.messages if m.get("role") != "system"]
-
-        return self.context_manager.build_messages_for_llm(
-            system_prompt,
-            conversation_messages,
-        )
-
     def _check_and_summarize(self) -> None:
         """Check if summarization is needed and trigger it if so."""
         if not self.config.context.auto_summarize:
@@ -224,116 +151,51 @@ class Agent:
             try:
                 self.context_manager.generate_summary(conversation_messages)
             except Exception:
-                # Don't fail the conversation if summarization fails
                 pass
 
     def send_message(self, content: str) -> str:
         """
         Send a user message and get the agent's response.
 
-        This handles the full tool-use loop:
-        1. Add user message
-        2. Get LLM response
-        3. If tools requested, execute them and continue
-        4. Return final text response
-
-        Args:
-            content: User's message
-
-        Returns:
-            Agent's final text response
+        Handles the full tool-use loop with session persistence.
         """
         # Record user message
         user_msg = Message(type="user", content=content)
         self.session_manager.append_message(self.session, user_msg)
         self.messages.append({"role": "user", "content": content})
 
-        # Maximum iterations to prevent infinite loops
         max_iterations = self.config.limits.get("max_tool_calls_per_turn", 20)
-        iterations = 0
 
-        while iterations < max_iterations:
-            iterations += 1
-
-            # Get context-managed messages for LLM
-            messages_for_llm = self._get_messages_for_llm()
-
-            # Call LLM
-            response = self.llm.chat(
-                messages=messages_for_llm,
-                tools=self.tools if self.tools else None,
-            )
-
-            assistant_message = response.choices[0].message
-
-            # Build message dict for history
-            msg_dict: dict[str, Any] = {
-                "role": "assistant",
-                "content": assistant_message.content,
-            }
-
-            # Build tool_calls list for session storage
-            tool_calls_for_session: list[dict[str, Any]] = []
-
-            if assistant_message.tool_calls:
-                msg_dict["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in assistant_message.tool_calls
-                ]
-                tool_calls_for_session = msg_dict["tool_calls"]
-
-            # Record assistant message to session
+        # Persistence hooks
+        def on_message(msg_content: str, tool_calls: list[dict[str, Any]]) -> None:
             asst_record = Message(
                 type="assistant",
-                content=assistant_message.content,
-                tool_calls=tool_calls_for_session if tool_calls_for_session else None,
+                content=msg_content,
+                tool_calls=tool_calls if tool_calls else None,
             )
             self.session_manager.append_message(self.session, asst_record)
 
-            # Add to LLM message history
-            self.messages.append(msg_dict)
+        def on_tool_result(
+            tool_call_id: str, name: str, result: dict[str, Any]
+        ) -> None:
+            tool_msg = Message(
+                type="tool_result",
+                tool_call_id=tool_call_id,
+                name=name,
+                content=json.dumps(result),
+            )
+            self.session_manager.append_message(self.session, tool_msg)
 
-            # If no tool calls, we're done
-            if not assistant_message.tool_calls:
-                return assistant_message.content or ""
+        try:
+            result = self._run_loop(
+                max_iterations,
+                on_message=on_message,
+                on_tool_result=on_tool_result,
+            )
+        except MaxIterationsError:
+            result = self.messages[-1].get("content", "") or ""
 
-            # Execute each tool call
-            for tool_call in assistant_message.tool_calls:
-                # Handle credential requests specially
-                if is_credential_request(tool_call):
-                    result = self._handle_credential_request(tool_call)
-                else:
-                    result = self._execute_tool_call(tool_call)
-
-                # Record tool result to session
-                tool_msg = Message(
-                    type="tool_result",
-                    tool_call_id=tool_call.id,
-                    name=tool_call.function.name,
-                    content=json.dumps(result),
-                )
-                self.session_manager.append_message(self.session, tool_msg)
-
-                # Add to LLM message history
-                self.messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(result),
-                })
-
-        # If we hit max iterations, return what we have
-        result = self.messages[-1].get("content", "") or ""
-
-        # Check if we should summarize after this exchange
         self._check_and_summarize()
-
         return result
 
     def send_message_stream(self, content: str):
@@ -342,153 +204,47 @@ class Agent:
 
         Yields events as tuples: (event_type, data)
         - ("text", str): Text chunk from the response
+        - ("reasoning", str): Reasoning/thinking content
         - ("tool_start", {"name": str, "arguments": str}): Tool execution starting
         - ("tool_end", {"name": str, "result": dict}): Tool execution completed
         - ("done", str): Final complete response
-
-        Args:
-            content: User's message
-
-        Yields:
-            Tuple of (event_type, data)
         """
-        from typing import Generator
-
         # Record user message
         user_msg = Message(type="user", content=content)
         self.session_manager.append_message(self.session, user_msg)
         self.messages.append({"role": "user", "content": content})
 
-        # Maximum iterations to prevent infinite loops
         max_iterations = self.config.limits.get("max_tool_calls_per_turn", 20)
-        iterations = 0
-        final_content = ""
 
-        while iterations < max_iterations:
-            iterations += 1
-
-            # Get context-managed messages for LLM
-            messages_for_llm = self._get_messages_for_llm()
-
-            # Call LLM with streaming
-            response = self.llm.chat(
-                messages=messages_for_llm,
-                tools=self.tools if self.tools else None,
-                stream=True,
-            )
-
-            # Collect streamed content and tool calls
-            collected_content = ""
-            collected_tool_calls: list[dict] = []
-
-            for chunk in response:
-                delta = chunk.choices[0].delta
-
-                # Check for reasoning/thinking content (some models like Claude provide this)
-                if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
-                    yield ("reasoning", delta.reasoning_content)
-
-                # Stream text content
-                if delta.content:
-                    collected_content += delta.content
-                    yield ("text", delta.content)
-
-                # Collect tool calls from stream
-                if delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        while len(collected_tool_calls) <= tc.index:
-                            collected_tool_calls.append({
-                                "id": "",
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""}
-                            })
-                        if tc.id:
-                            collected_tool_calls[tc.index]["id"] = tc.id
-                        if tc.function:
-                            if tc.function.name:
-                                collected_tool_calls[tc.index]["function"]["name"] = tc.function.name
-                            if tc.function.arguments:
-                                collected_tool_calls[tc.index]["function"]["arguments"] += tc.function.arguments
-
-            # Build message dict for history
-            msg_dict: dict[str, Any] = {
-                "role": "assistant",
-                "content": collected_content,
-            }
-            if collected_tool_calls:
-                msg_dict["tool_calls"] = collected_tool_calls
-
-            # Record assistant message to session
-            asst_record = Message(
-                type="assistant",
-                content=collected_content,
-                tool_calls=collected_tool_calls if collected_tool_calls else None,
-            )
-            self.session_manager.append_message(self.session, asst_record)
-
-            # Add to LLM message history
-            self.messages.append(msg_dict)
-
-            # If no tool calls, we're done
-            if not collected_tool_calls:
-                final_content = collected_content
-                break
-
-            # Execute each tool call
-            for tc_dict in collected_tool_calls:
-                tool_name = tc_dict["function"]["name"]
-                tool_args = tc_dict["function"]["arguments"]
-                tool_id = tc_dict["id"]
-
-                yield ("tool_start", {"name": tool_name, "arguments": tool_args})
-
-                # Create a simple object to match the tool_call interface
-                class ToolCallObj:
-                    def __init__(self, id, name, arguments):
-                        self.id = id
-                        self.function = type('obj', (object,), {'name': name, 'arguments': arguments})()
-
-                tc_obj = ToolCallObj(tool_id, tool_name, tool_args)
-
-                # Handle credential requests specially
-                if tool_name == "request_credential":
-                    result = self._handle_credential_request(tc_obj)
-                else:
-                    result = self._execute_tool_call(tc_obj)
-
-                yield ("tool_end", {"name": tool_name, "result": result})
-
-                # Record tool result to session
+        for event_type, data in self._run_loop_stream(max_iterations):
+            if event_type == "_message":
+                # Persist assistant message to session
+                msg_content, tool_calls = data
+                asst_record = Message(
+                    type="assistant",
+                    content=msg_content,
+                    tool_calls=tool_calls,
+                )
+                self.session_manager.append_message(self.session, asst_record)
+            elif event_type == "_tool_result":
+                # Persist tool result to session
+                tool_call_id, name, result = data
                 tool_msg = Message(
                     type="tool_result",
-                    tool_call_id=tool_id,
-                    name=tool_name,
+                    tool_call_id=tool_call_id,
+                    name=name,
                     content=json.dumps(result),
                 )
                 self.session_manager.append_message(self.session, tool_msg)
-
-                # Add to LLM message history
-                self.messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_id,
-                    "content": json.dumps(result),
-                })
-
-        # Check if we should summarize after this exchange
-        self._check_and_summarize()
-
-        yield ("done", final_content)
+            elif event_type == "done":
+                self._check_and_summarize()
+                yield (event_type, data)
+            else:
+                # Pass through: text, reasoning, tool_start, tool_end
+                yield (event_type, data)
 
     def _handle_credential_request(self, tool_call: Any) -> dict[str, Any]:
-        """
-        Handle a credential request from the LLM.
-
-        Args:
-            tool_call: The tool call requesting credentials
-
-        Returns:
-            Result dict indicating success or failure
-        """
+        """Handle a credential request from the LLM."""
         try:
             args = json.loads(tool_call.function.arguments)
         except json.JSONDecodeError:
@@ -530,98 +286,8 @@ class Agent:
             "message": f"Credential {name} has been provided and is now available",
         }
 
-    def _execute_tool_call(self, tool_call: Any) -> dict[str, Any]:
-        """
-        Execute a single tool call.
-
-        Args:
-            tool_call: Tool call from LLM response
-
-        Returns:
-            Result dict from tool execution
-        """
-        name = tool_call.function.name
-
-        # Check if this is a delegation tool
-        if self.delegation_mgr and self.delegation_mgr.is_delegation_tool(name):
-            return self.delegation_mgr.execute_delegation(tool_call)
-
-        # Check if this is a process management tool
-        from supyagent.core.process_tools import is_process_tool, execute_process_tool
-
-        if is_process_tool(name):
-            try:
-                args = json.loads(tool_call.function.arguments)
-            except json.JSONDecodeError:
-                return {"ok": False, "error": "Invalid JSON arguments"}
-            return execute_process_tool(name, args)
-
-        # Parse arguments
-        arguments_str = tool_call.function.arguments
-        try:
-            args = json.loads(arguments_str)
-        except json.JSONDecodeError:
-            return {"ok": False, "error": f"Invalid JSON arguments: {arguments_str}"}
-
-        # Parse script__function format
-        if "__" not in name:
-            return {"ok": False, "error": f"Invalid tool name format: {name}"}
-
-        script, func = name.split("__", 1)
-
-        # Get credentials for tool execution
-        secrets = self.credential_manager.get_all_for_tools(self.config.name)
-
-        # Check supervisor settings for this tool
-        sup_settings = self.config.supervisor
-        timeout = sup_settings.default_timeout
-        use_supervisor = True  # Always use supervisor for timeout/background support
-
-        # Check if tool matches force_background or force_sync patterns
-        import fnmatch
-        force_background = any(
-            fnmatch.fnmatch(name, pattern) 
-            for pattern in sup_settings.force_background_patterns
-        )
-        force_sync = any(
-            fnmatch.fnmatch(name, pattern) 
-            for pattern in sup_settings.force_sync_patterns
-        )
-
-        # Per-tool settings override
-        for pattern, tool_settings in sup_settings.tool_settings.items():
-            if fnmatch.fnmatch(name, pattern):
-                timeout = tool_settings.timeout
-                if tool_settings.mode == "background":
-                    force_background = True
-                elif tool_settings.mode == "sync":
-                    force_sync = True
-                break
-
-        # Execute via supypowers with supervisor
-        return execute_tool(
-            script, func, args, 
-            secrets=secrets,
-            timeout=timeout if not force_sync else None,
-            background=force_background,
-            use_supervisor=use_supervisor and not force_sync,
-        )
-
-    def get_available_tools(self) -> list[str]:
-        """
-        Get list of available tool names.
-
-        Returns:
-            List of tool names
-        """
-        return [
-            tool.get("function", {}).get("name", "unknown")
-            for tool in self.tools
-        ]
-
     def clear_history(self) -> None:
         """Clear conversation history and start a new session."""
-        # Create a new session
         self.session = self.session_manager.create_session(
             self.config.name, self.config.model.provider
         )

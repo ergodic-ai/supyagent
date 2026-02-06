@@ -122,6 +122,35 @@ class SupervisorSettings(BaseModel):
         description="Default timeout for delegated agent tasks (seconds)"
     )
 
+    def resolve_tool_settings(self, tool_name: str) -> tuple[float, bool, bool]:
+        """
+        Resolve execution settings for a specific tool.
+
+        Returns:
+            Tuple of (timeout, force_background, force_sync)
+        """
+        import fnmatch
+
+        timeout = self.default_timeout
+        force_background = any(
+            fnmatch.fnmatch(tool_name, p) for p in self.force_background_patterns
+        )
+        force_sync = any(
+            fnmatch.fnmatch(tool_name, p) for p in self.force_sync_patterns
+        )
+
+        # Per-tool settings override
+        for pattern, settings in self.tool_settings.items():
+            if fnmatch.fnmatch(tool_name, pattern):
+                timeout = settings.timeout
+                if settings.mode == "background":
+                    force_background = True
+                elif settings.mode == "sync":
+                    force_sync = True
+                break
+
+        return timeout, force_background, force_sync
+
 
 class AgentConfig(BaseModel):
     """

@@ -169,7 +169,7 @@ class TestChatCommand:
         assert result.exit_code == 1
         assert "not found" in result.output
 
-    @patch("supyagent.core.agent.discover_tools", return_value=[])
+    @patch("supyagent.core.engine.discover_tools", return_value=[])
     @patch("supyagent.cli.main.Agent")
     def test_chat_quit_command(self, mock_agent_class, mock_discover, isolated_runner):
         """Test /quit command exits chat."""
@@ -188,7 +188,7 @@ class TestChatCommand:
         result = isolated_runner.invoke(cli, ["chat", "myagent"], input="/quit\n")
         assert "Goodbye" in result.output
 
-    @patch("supyagent.core.agent.discover_tools", return_value=[])
+    @patch("supyagent.core.engine.discover_tools", return_value=[])
     @patch("supyagent.cli.main.Agent")
     def test_chat_help_command(self, mock_agent_class, mock_discover, isolated_runner):
         """Test /help command shows help."""

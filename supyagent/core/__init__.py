@@ -3,6 +3,7 @@
 from supyagent.core.agent import Agent
 from supyagent.core.config import ConfigManager, load_config
 from supyagent.core.context import DelegationContext
+from supyagent.core.engine import BaseAgentEngine
 from supyagent.core.context_manager import ContextManager
 from supyagent.core.credentials import CredentialManager
 from supyagent.core.delegation import DelegationManager
@@ -15,6 +16,7 @@ from supyagent.core.tokens import count_messages_tokens, count_tokens, get_conte
 __all__ = [
     "Agent",
     "AgentRegistry",
+    "BaseAgentEngine",
     "ConfigManager",
     "ContextManager",
     "CredentialManager",

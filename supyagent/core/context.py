@@ -29,6 +29,7 @@ class DelegationContext:
     conversation_summary: str | None = None
     relevant_facts: list[str] = field(default_factory=list)
     shared_data: dict[str, Any] = field(default_factory=dict)
+    depth: int = 0
 
     def to_prompt(self) -> str:
         """

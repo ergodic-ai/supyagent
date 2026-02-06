@@ -14,7 +14,7 @@ from supyagent.models.session import Message, Session, SessionMeta
 class TestAgentInitialization:
     """Tests for Agent initialization."""
 
-    @patch("supyagent.core.agent.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_agent_creates_new_session(self, mock_discover, sample_agent_config, sessions_dir):
         """Test that Agent creates a new session if none provided."""
         mock_discover.return_value = []
@@ -27,7 +27,7 @@ class TestAgentInitialization:
         assert len(agent.messages) == 1  # System prompt only
         assert agent.messages[0]["role"] == "system"
 
-    @patch("supyagent.core.agent.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_agent_uses_provided_session(self, mock_discover, sample_agent_config, sessions_dir):
         """Test that Agent uses an existing session if provided."""
         mock_discover.return_value = []
@@ -46,7 +46,7 @@ class TestAgentInitialization:
         # Should have system prompt + reconstructed messages
         assert len(agent.messages) == 3  # system + user + assistant
 
-    @patch("supyagent.core.agent.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_agent_reconstructs_messages(self, mock_discover, sample_agent_config, sessions_dir):
         """Test that Agent correctly reconstructs LLM messages from session."""
         mock_discover.return_value = []
@@ -74,7 +74,7 @@ class TestAgentInitialization:
 class TestAgentSendMessage:
     """Tests for Agent.send_message()."""
 
-    @patch("supyagent.core.agent.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_send_message_simple_response(
         self, mock_discover, sample_agent_config, sessions_dir, mock_llm_response
     ):
@@ -93,8 +93,8 @@ class TestAgentSendMessage:
         assert agent.session.messages[0].type == "user"
         assert agent.session.messages[1].type == "assistant"
 
-    @patch("supyagent.core.agent.discover_tools")
-    @patch("supyagent.core.agent.execute_tool")
+    @patch("supyagent.core.engine.discover_tools")
+    @patch("supyagent.core.engine.execute_tool")
     def test_send_message_with_tool_call(
         self,
         mock_execute_tool,
@@ -130,7 +130,7 @@ class TestAgentSendMessage:
         assert agent.session.messages[2].type == "tool_result"
         assert agent.session.messages[3].type == "assistant"
 
-    @patch("supyagent.core.agent.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_messages_persisted_to_session(
         self, mock_discover, sample_agent_config, sessions_dir, mock_llm_response
     ):
@@ -154,8 +154,8 @@ class TestAgentSendMessage:
 class TestAgentToolExecution:
     """Tests for tool execution."""
 
-    @patch("supyagent.core.agent.discover_tools")
-    @patch("supyagent.core.agent.execute_tool")
+    @patch("supyagent.core.engine.discover_tools")
+    @patch("supyagent.core.engine.execute_tool")
     def test_execute_tool_call_success(
         self, mock_execute_tool, mock_discover, sample_agent_config, sessions_dir
     ):
@@ -171,7 +171,7 @@ class TestAgentToolExecution:
         tool_call.function.name = "script__function"
         tool_call.function.arguments = '{"arg": "value"}'
 
-        result = agent._execute_tool_call(tool_call)
+        result = agent._dispatch_tool_call(tool_call)
 
         mock_execute_tool.assert_called_once()
         call_args = mock_execute_tool.call_args
@@ -179,7 +179,7 @@ class TestAgentToolExecution:
         assert call_args[1]["secrets"] == {}
         assert result == {"ok": True, "data": "result"}
 
-    @patch("supyagent.core.agent.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_execute_tool_call_invalid_name(
         self, mock_discover, sample_agent_config, sessions_dir
     ):
@@ -194,12 +194,12 @@ class TestAgentToolExecution:
         tool_call.function.name = "invalidname"
         tool_call.function.arguments = '{}'
 
-        result = agent._execute_tool_call(tool_call)
+        result = agent._dispatch_tool_call(tool_call)
 
         assert result["ok"] is False
         assert "Invalid tool name" in result["error"]
 
-    @patch("supyagent.core.agent.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_execute_tool_call_invalid_json(
         self, mock_discover, sample_agent_config, sessions_dir
     ):
@@ -214,7 +214,7 @@ class TestAgentToolExecution:
         tool_call.function.name = "script__func"
         tool_call.function.arguments = 'not valid json'
 
-        result = agent._execute_tool_call(tool_call)
+        result = agent._dispatch_tool_call(tool_call)
 
         assert result["ok"] is False
         assert "Invalid JSON" in result["error"]
@@ -223,7 +223,7 @@ class TestAgentToolExecution:
 class TestAgentClearHistory:
     """Tests for clearing history."""
 
-    @patch("supyagent.core.agent.discover_tools")
+    @patch("supyagent.core.engine.discover_tools")
     def test_clear_history_creates_new_session(
         self, mock_discover, sample_agent_config, sessions_dir, mock_llm_response
     ):
@@ -250,9 +250,9 @@ class TestAgentClearHistory:
 class TestAgentAvailableTools:
     """Tests for get_available_tools()."""
 
-    @patch("supyagent.core.agent.discover_tools")
-    @patch("supyagent.core.agent.supypowers_to_openai_tools")
-    @patch("supyagent.core.agent.filter_tools")
+    @patch("supyagent.core.engine.discover_tools")
+    @patch("supyagent.core.engine.supypowers_to_openai_tools")
+    @patch("supyagent.core.engine.filter_tools")
     def test_get_available_tools(
         self,
         mock_filter,
