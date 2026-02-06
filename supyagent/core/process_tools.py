@@ -1,12 +1,14 @@
 """
-Process management tools for LLM.
+Process management and built-in tools for LLM.
 
 These tools allow the agent to check on, interact with,
-and terminate background processes.
+and terminate background processes, as well as sleep for
+timed workflows.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from supyagent.core.supervisor import get_supervisor
@@ -105,16 +107,45 @@ def get_process_management_tools() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "sleep",
+                "description": (
+                    "Pause execution for a specified duration. "
+                    "Use for timed workflows (e.g., 'wait 1 hour then check again'). "
+                    "The agent will resume after the sleep completes."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "seconds": {
+                            "type": "number",
+                            "description": (
+                                "Duration to sleep in seconds "
+                                "(e.g., 60 for 1 minute, 3600 for 1 hour)"
+                            ),
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Why the agent is sleeping (for logging/context)",
+                        },
+                    },
+                    "required": ["seconds"],
+                },
+            },
+        },
     ]
 
 
 def is_process_tool(tool_name: str) -> bool:
-    """Check if a tool name is a process management tool."""
+    """Check if a tool name is a process management or built-in tool."""
     return tool_name in (
         "list_processes",
         "check_process",
         "get_process_output",
         "kill_process",
+        "sleep",
     )
 
 
@@ -198,6 +229,23 @@ async def execute_process_tool_async(
             return {"ok": False, "error": "process_id is required"}
 
         return await supervisor.kill(process_id)
+
+    elif tool_name == "sleep":
+        seconds = args.get("seconds", 0)
+        reason = args.get("reason", "")
+        if not isinstance(seconds, (int, float)) or seconds <= 0:
+            return {"ok": False, "error": "seconds must be a positive number"}
+        if seconds > 86400:
+            return {"ok": False, "error": "Maximum sleep is 24 hours (86400 seconds)"}
+        await asyncio.sleep(seconds)
+        return {
+            "ok": True,
+            "data": {
+                "slept_seconds": seconds,
+                "reason": reason,
+                "message": f"Slept for {seconds} seconds. Resuming now.",
+            },
+        }
 
     return {"ok": False, "error": f"Unknown process tool: {tool_name}"}
 

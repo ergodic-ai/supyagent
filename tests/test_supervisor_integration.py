@@ -527,6 +527,7 @@ class TestProcessTools:
         assert is_process_tool("check_process")
         assert is_process_tool("get_process_output")
         assert is_process_tool("kill_process")
+        assert is_process_tool("sleep")
         assert not is_process_tool("shell__run_command")
         assert not is_process_tool("files__read_file")
         assert not is_process_tool("")
@@ -633,6 +634,55 @@ class TestProcessTools:
         result = await execute_process_tool_async("check_process", {})
         assert result["ok"] is False
         assert "required" in result["error"].lower()
+
+
+# ===========================================================================
+# 8b. Sleep tool
+# ===========================================================================
+
+class TestSleepTool:
+    """Tests for the built-in sleep tool."""
+
+    async def test_sleep_short_duration(self):
+        """Sleep for a very short duration and verify result."""
+        result = await execute_process_tool_async("sleep", {"seconds": 0.01})
+        assert result["ok"] is True
+        assert result["data"]["slept_seconds"] == 0.01
+        assert "Resuming now" in result["data"]["message"]
+
+    async def test_sleep_with_reason(self):
+        """Sleep with a reason and verify it's returned."""
+        result = await execute_process_tool_async(
+            "sleep", {"seconds": 0.01, "reason": "waiting for API"}
+        )
+        assert result["ok"] is True
+        assert result["data"]["reason"] == "waiting for API"
+
+    async def test_sleep_zero_seconds(self):
+        """Sleep with zero seconds returns error."""
+        result = await execute_process_tool_async("sleep", {"seconds": 0})
+        assert result["ok"] is False
+        assert "positive" in result["error"].lower()
+
+    async def test_sleep_negative_seconds(self):
+        """Sleep with negative seconds returns error."""
+        result = await execute_process_tool_async("sleep", {"seconds": -10})
+        assert result["ok"] is False
+        assert "positive" in result["error"].lower()
+
+    async def test_sleep_exceeds_max(self):
+        """Sleep exceeding 24 hours returns error."""
+        result = await execute_process_tool_async("sleep", {"seconds": 86401})
+        assert result["ok"] is False
+        assert "24 hours" in result["error"]
+
+    def test_sleep_in_tool_schemas(self):
+        """Sleep tool is included in the tool schemas."""
+        from supyagent.core.process_tools import get_process_management_tools
+
+        tools = get_process_management_tools()
+        names = [t["function"]["name"] for t in tools]
+        assert "sleep" in names
 
 
 # ===========================================================================
