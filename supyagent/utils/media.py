@@ -87,7 +87,8 @@ def wrap_with_image(text: str, image_path: str | Path) -> list[dict[str, Any]]:
 def detect_images_in_tool_result(result: dict[str, Any]) -> list[str]:
     """Detect image file paths in a tool result dict.
 
-    Uses two strategies:
+    Uses three strategies:
+    0. Structured ``_media`` list with typed entries (new convention).
     1. Explicit ``_images`` key with a list of file paths.
     2. Auto-detect screenshot-style results: ``ok=True`` with a ``path``
        key ending in a known image extension.
@@ -96,6 +97,19 @@ def detect_images_in_tool_result(result: dict[str, Any]) -> list[str]:
         List of existing image file paths found.
     """
     images: list[str] = []
+
+    # Strategy 0: structured _media list (new convention)
+    def _collect_media(container: dict[str, Any]) -> None:
+        if "_media" in container:
+            for entry in container["_media"]:
+                if isinstance(entry, dict) and entry.get("type") == "image":
+                    path_val = entry.get("path")
+                    if isinstance(path_val, str) and Path(path_val).exists() and path_val not in images:
+                        images.append(path_val)
+
+    _collect_media(result)
+    if isinstance(result.get("data"), dict):
+        _collect_media(result["data"])
 
     # Strategy 1: explicit image list keys (_images or images)
     def _collect_image_list(container: dict[str, Any]) -> None:

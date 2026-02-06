@@ -78,8 +78,8 @@ def cli(ctx: click.Context, debug: bool):
 @click.option(
     "--tools-dir",
     "-t",
-    default="supypowers",
-    help="Directory for tools (default: supypowers/)",
+    default="powers",
+    help="Directory for tools (default: powers/)",
 )
 @click.option(
     "--force",
@@ -92,7 +92,7 @@ def init(tools_dir: str, force: bool):
     Initialize supyagent in the current directory.
 
     This sets up:
-    - Default tools in supypowers/ (shell commands, file operations)
+    - Default tools in powers/ (shell commands, file operations)
     - agents/ directory for agent configurations
 
     \b
@@ -1253,12 +1253,12 @@ def doctor():
                 pass
 
     # 5. Check default tools
-    tools_dir = Path("supypowers")
+    tools_dir = Path("powers")
     if tools_dir.exists():
         tool_files = [f for f in tools_dir.glob("*.py") if f.name != "__init__.py"]
-        console.print(f"[green]  ✓[/green] supypowers/ directory found ({len(tool_files)} tools)")
+        console.print(f"[green]  ✓[/green] powers/ directory found ({len(tool_files)} tools)")
     else:
-        console.print("[yellow]  ![/yellow] supypowers/ not found (no custom tools)")
+        console.print("[yellow]  ![/yellow] powers/ not found (no custom tools)")
         console.print("    Run: [cyan]supyagent init[/cyan]")
 
     # 6. Check sessions directory
@@ -1354,15 +1354,15 @@ def tools_new(name: str):
     """
     Create a new tool from template.
 
-    NAME is the tool name (will create supypowers/NAME.py).
+    NAME is the tool name (will create powers/NAME.py).
 
     \b
     Example:
         supyagent tools new github_api
     """
-    tools_dir = Path("supypowers")
+    tools_dir = Path("powers")
     if not tools_dir.exists():
-        console.print("[yellow]supypowers/ directory not found.[/yellow]")
+        console.print("[yellow]powers/ directory not found.[/yellow]")
         console.print("Run [cyan]supyagent init[/cyan] first.")
         return
 

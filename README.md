@@ -266,7 +266,7 @@ Running `supyagent init` installs these default tools:
 - `create_directory` - Create directories
 - `file_info` - Get file metadata
 
-You can add your own tools by creating Python files in `supypowers/`.
+You can add your own tools by creating Python files in `powers/`.
 
 ## Project Structure
 
@@ -276,7 +276,7 @@ your-project/
 │   ├── assistant.yaml
 │   ├── planner.yaml
 │   └── researcher.yaml
-├── supypowers/          # Tool definitions (Python)
+├── powers/              # Tool definitions (Python)
 │   ├── shell.py         # Shell commands (bundled)
 │   ├── files.py         # File operations (bundled)
 │   └── my_tools.py      # Your custom tools

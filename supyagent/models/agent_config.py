@@ -202,7 +202,7 @@ You can create new tools using supypowers. Tools are Python functions that you c
 
 ### How to Create a New Tool
 
-1. **Create a Python file** in the `supypowers/` directory (e.g., `supypowers/my_tool.py`)
+1. **Create a Python file** in the `powers/` directory (e.g., `powers/my_tool.py`)
 
 2. **Use this template:**
 

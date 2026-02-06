@@ -18,9 +18,6 @@ import httpx
 import litellm
 from pydantic import BaseModel, Field
 
-# Suppress litellm's verbose stdout messages that corrupt JSON output
-litellm.suppress_debug_info = True
-
 
 # ── generate_image ──────────────────────────────────────────────────────────
 

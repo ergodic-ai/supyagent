@@ -32,7 +32,7 @@ ruff format --check .
 
 ## Architecture
 
-Supyagent is an LLM agent framework that uses [supypowers](https://github.com/ergodic-ai/supypowers) for tool execution and [LiteLLM](https://github.com/BerriAI/litellm) for multi-provider LLM access. Agents are defined in YAML files in `agents/` and tools are Python scripts in `supypowers/`.
+Supyagent is an LLM agent framework that uses [supypowers](https://github.com/ergodic-ai/supypowers) for tool execution and [LiteLLM](https://github.com/BerriAI/litellm) for multi-provider LLM access. Agents are defined in YAML files in `agents/` and tools are Python scripts in `powers/`.
 
 ### Core Loop
 
@@ -88,7 +88,7 @@ Single entry point: `supyagent` (Click-based, `supyagent/cli/main.py`). Key comm
 
 ### Default Tools
 
-Bundled in `supyagent/default_tools/` and copied to user's `supypowers/` dir on `supyagent init`. Includes: shell, files, edit, find, search, web, browser.
+Bundled in `supyagent/default_tools/` and copied to user's `powers/` dir on `supyagent init`. Includes: shell, files, edit, find, search, web, browser.
 
 ## Key Conventions
 

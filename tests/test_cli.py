@@ -343,26 +343,26 @@ class TestToolsCommands:
     """Tests for 'supyagent tools' command group."""
 
     def test_tools_list_no_tools(self, isolated_runner):
-        """Test listing tools when no supypowers dir exists."""
+        """Test listing tools when no powers dir exists."""
         result = isolated_runner.invoke(cli, ["tools", "list"])
         assert result.exit_code == 0
         assert "No tools found" in result.output
 
     def test_tools_new(self, isolated_runner):
         """Test creating a new tool."""
-        Path("supypowers").mkdir()
+        Path("powers").mkdir()
         result = isolated_runner.invoke(cli, ["tools", "new", "my_tool"])
         assert result.exit_code == 0
         assert "Created" in result.output
-        assert Path("supypowers/my_tool.py").exists()
+        assert Path("powers/my_tool.py").exists()
 
-        content = Path("supypowers/my_tool.py").read_text()
+        content = Path("powers/my_tool.py").read_text()
         assert "class MyToolInput" in content
         assert "class MyToolOutput" in content
         assert "def my_tool" in content
 
     def test_tools_new_no_dir(self, isolated_runner):
-        """Test creating a tool when supypowers dir doesn't exist."""
+        """Test creating a tool when powers dir doesn't exist."""
         result = isolated_runner.invoke(cli, ["tools", "new", "my_tool"])
         assert result.exit_code == 0
         assert "not found" in result.output

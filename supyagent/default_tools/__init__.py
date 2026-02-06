@@ -16,12 +16,12 @@ def get_bundled_tools() -> list[Path]:
     return [f for f in TOOLS_DIR.glob("*.py") if f.name != "__init__.py"]
 
 
-def install_default_tools(target_dir: Path | str = "supypowers") -> int:
+def install_default_tools(target_dir: Path | str = "powers") -> int:
     """
     Install default tools to a target directory.
 
     Args:
-        target_dir: Directory to install tools to (default: supypowers/)
+        target_dir: Directory to install tools to (default: powers/)
 
     Returns:
         Number of files installed
