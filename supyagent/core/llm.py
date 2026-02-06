@@ -2,14 +2,23 @@
 LiteLLM wrapper for unified LLM access.
 """
 
+import logging
+import time
 from typing import Any
 
 import litellm
 from litellm import completion
+from litellm.exceptions import (
+    APIConnectionError,
+    RateLimitError,
+    ServiceUnavailableError,
+)
 from litellm.types.utils import ModelResponse
 
 # Suppress LiteLLM debug messages (e.g., "Provider List: ...")
 litellm.suppress_debug_info = True
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
@@ -28,6 +37,9 @@ class LLMClient:
         model: str,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+        retry_backoff: float = 2.0,
     ):
         """
         Initialize the LLM client.
@@ -36,10 +48,16 @@ class LLMClient:
             model: LiteLLM model identifier (e.g., 'anthropic/claude-3-5-sonnet-20241022')
             temperature: Sampling temperature (0-2)
             max_tokens: Maximum tokens in response
+            max_retries: Maximum number of retries on transient errors
+            retry_delay: Initial delay between retries (seconds)
+            retry_backoff: Exponential backoff multiplier
         """
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.retry_backoff = retry_backoff
 
     def chat(
         self,
@@ -48,7 +66,7 @@ class LLMClient:
         stream: bool = False,
     ) -> ModelResponse:
         """
-        Send a chat completion request.
+        Send a chat completion request with automatic retry on transient errors.
 
         Args:
             messages: List of message dicts with 'role' and 'content'
@@ -70,7 +88,28 @@ class LLMClient:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        return completion(**kwargs)
+        last_error: Exception | None = None
+        delay = self.retry_delay
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                return completion(**kwargs)
+            except (RateLimitError, ServiceUnavailableError, APIConnectionError) as e:
+                last_error = e
+                if attempt < self.max_retries:
+                    logger.warning(
+                        "LLM call failed (attempt %d/%d): %s. Retrying in %.1fs...",
+                        attempt + 1,
+                        self.max_retries + 1,
+                        e,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    delay *= self.retry_backoff
+                else:
+                    raise
+
+        raise last_error  # Should not reach here
 
     def change_model(self, model: str) -> None:
         """Change the model being used."""

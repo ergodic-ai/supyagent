@@ -15,6 +15,9 @@ class ModelConfig(BaseModel):
     provider: str = Field(..., description="LiteLLM model identifier (e.g., 'anthropic/claude-3-5-sonnet-20241022')")
     temperature: float = Field(default=0.7, ge=0, le=2)
     max_tokens: int = Field(default=4096, gt=0)
+    max_retries: int = Field(default=3, ge=0, description="Max retries on transient LLM errors")
+    retry_delay: float = Field(default=1.0, gt=0, description="Initial retry delay in seconds")
+    retry_backoff: float = Field(default=2.0, gt=1, description="Exponential backoff multiplier")
 
 
 class ToolPermissions(BaseModel):

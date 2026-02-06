@@ -14,6 +14,7 @@ import subprocess
 from typing import Any
 
 from supyagent.models.agent_config import ToolPermissions
+from supyagent.models.tool_result import ToolResult, timed_execution
 
 
 # Special tool that allows LLM to request credentials from user
@@ -108,11 +109,17 @@ def execute_tool(
     Returns:
         Result dict with 'ok' and 'data' or 'error'
     """
+    tool_name = f"{script}__{func}"
+
     # If supervisor features requested, use async path
     if use_supervisor or background or timeout is not None:
-        return _execute_tool_sync_via_supervisor(
-            script, func, args, secrets, timeout, background
-        )
+        with timed_execution() as timing:
+            result = _execute_tool_sync_via_supervisor(
+                script, func, args, secrets, timeout, background
+            )
+        result.setdefault("tool_name", tool_name)
+        result.setdefault("duration_ms", timing.get("duration_ms"))
+        return result
 
     # Original sync implementation for backwards compatibility
     cmd = ["supypowers", "run", f"{script}:{func}", json.dumps(args)]
@@ -122,27 +129,49 @@ def execute_tool(
         for key, value in secrets.items():
             cmd.extend(["--secrets", f"{key}={value}"])
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minute timeout for tool execution
-        )
+    with timed_execution() as timing:
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout for tool execution
+            )
 
-        if result.returncode != 0:
-            # Try to parse error from stderr or stdout
-            error_msg = result.stderr or result.stdout or "Unknown error"
-            return {"ok": False, "error": error_msg.strip()}
+            if result.returncode != 0:
+                error_msg = result.stderr or result.stdout or "Unknown error"
+                return ToolResult.fail(
+                    error_msg.strip(),
+                    error_type="execution_error",
+                    tool_name=tool_name,
+                    duration_ms=timing.get("duration_ms"),
+                ).to_dict()
 
-        return json.loads(result.stdout)
+            raw = json.loads(result.stdout)
+            raw.setdefault("tool_name", tool_name)
+            raw.setdefault("duration_ms", timing.get("duration_ms"))
+            return raw
 
-    except FileNotFoundError:
-        return {"ok": False, "error": "supypowers not installed"}
-    except json.JSONDecodeError as e:
-        return {"ok": False, "error": f"Invalid JSON response: {e}"}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "Tool execution timed out"}
+        except FileNotFoundError:
+            return ToolResult.fail(
+                "supypowers not installed",
+                error_type="tool_not_found",
+                tool_name=tool_name,
+            ).to_dict()
+        except json.JSONDecodeError as e:
+            return ToolResult.fail(
+                f"Invalid JSON response: {e}",
+                error_type="execution_error",
+                tool_name=tool_name,
+                duration_ms=timing.get("duration_ms"),
+            ).to_dict()
+        except subprocess.TimeoutExpired:
+            return ToolResult.fail(
+                "Tool execution timed out",
+                error_type="timeout",
+                tool_name=tool_name,
+                duration_ms=timing.get("duration_ms"),
+            ).to_dict()
 
 
 async def execute_tool_async(

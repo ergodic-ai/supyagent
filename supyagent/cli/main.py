@@ -462,6 +462,8 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
 
                 elif cmd == "context":
                     # Show context window status with trigger thresholds
+                    from supyagent.core.tokens import count_tools_tokens
+
                     conversation_messages = [
                         m for m in agent.messages if m.get("role") != "system"
                     ]
@@ -470,6 +472,17 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
                     )
 
                     console.print(f"\n[cyan]Context Status[/cyan]")
+                    console.print(
+                        f"  [dim]Context limit:[/dim] {agent.context_manager.context_limit:,} tokens"
+                    )
+
+                    # Tool definition tokens
+                    tools_tokens = count_tools_tokens(agent.tools, agent.context_manager.model)
+                    if tools_tokens > 0:
+                        console.print(
+                            f"  [dim]Tool definitions:[/dim] {tools_tokens:,} tokens "
+                            f"({len(agent.tools)} tools)"
+                        )
 
                     if agent.context_manager.summary:
                         summary = agent.context_manager.summary
@@ -696,10 +709,29 @@ def chat(agent_name: str, new_session: bool, session_id: str | None):
 
 @cli.command()
 @click.argument("agent_name")
-def sessions(agent_name: str):
+@click.option("--search", "-s", "search_query", help="Search sessions by title keyword")
+@click.option("--delete-all", "delete_all", is_flag=True, help="Delete all sessions for this agent")
+def sessions(agent_name: str, search_query: str | None, delete_all: bool):
     """List all sessions for an agent."""
     session_mgr = SessionManager()
-    session_list = session_mgr.list_sessions(agent_name)
+
+    # Handle delete-all
+    if delete_all:
+        count = session_mgr.delete_all_sessions(agent_name)
+        if count == 0:
+            console.print(f"[dim]No sessions to delete for '{agent_name}'[/dim]")
+        else:
+            console.print(f"[green]✓[/green] Deleted {count} session(s) for '{agent_name}'")
+        return
+
+    # Handle search
+    if search_query:
+        session_list = session_mgr.search_sessions(agent_name, query=search_query)
+        if not session_list:
+            console.print(f"[dim]No sessions matching '{search_query}' for '{agent_name}'[/dim]")
+            return
+    else:
+        session_list = session_mgr.list_sessions(agent_name)
 
     if not session_list:
         console.print(f"[dim]No sessions found for '{agent_name}'[/dim]")
@@ -712,7 +744,11 @@ def sessions(agent_name: str):
     current = session_mgr.get_current_session(agent_name)
     current_id = current.meta.session_id if current else None
 
-    table = Table(title=f"Sessions for {agent_name}")
+    title_text = f"Sessions for {agent_name}"
+    if search_query:
+        title_text += f" (search: '{search_query}')"
+
+    table = Table(title=title_text)
     table.add_column("ID", style="cyan")
     table.add_column("Title")
     table.add_column("Created", style="dim")

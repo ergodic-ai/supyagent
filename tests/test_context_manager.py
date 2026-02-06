@@ -15,6 +15,7 @@ from supyagent.core.tokens import (
     count_message_tokens,
     count_messages_tokens,
     count_tokens,
+    count_tools_tokens,
     get_context_limit,
     get_encoding,
 )
@@ -105,7 +106,9 @@ class TestGetContextLimit:
         assert get_context_limit("claude-3-5-sonnet") == 200000
 
     def test_kimi_limit(self):
-        assert get_context_limit("openrouter/moonshotai/kimi-k2.5") == 128000
+        # litellm may resolve dynamically; verify we get a reasonable limit
+        limit = get_context_limit("openrouter/moonshotai/kimi-k2.5")
+        assert limit >= 128000  # At least our hardcoded fallback
 
     def test_unknown_model_default(self):
         assert get_context_limit("unknown-model-xyz") == 128000
@@ -491,3 +494,234 @@ class TestAgentConfigContextSettings:
         )
         assert config.context.max_messages_before_summary == 20
         assert config.context.max_tokens_before_summary == 64000
+
+
+# =============================================================================
+# Tool Token Counting Tests (Sprint 10)
+# =============================================================================
+
+
+class TestCountToolsTokens:
+    """Tests for count_tools_tokens function."""
+
+    def test_empty_tools(self):
+        assert count_tools_tokens([]) == 0
+
+    def test_tools_consume_tokens(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "test__func",
+                    "description": "A test function",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "arg1": {"type": "string", "description": "First argument"},
+                            "arg2": {"type": "integer", "description": "Second argument"},
+                        },
+                    },
+                },
+            }
+        ]
+        tokens = count_tools_tokens(tools)
+        assert tokens > 0
+
+    def test_more_tools_more_tokens(self):
+        """More tools should consume more tokens."""
+        tool_template = {
+            "type": "function",
+            "function": {
+                "name": "test__func",
+                "description": "A function",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+        small = [tool_template]
+        large = [tool_template] * 10
+
+        assert count_tools_tokens(large) > count_tools_tokens(small)
+
+
+class TestToolsReduceContext:
+    """Tests for tool definitions reducing available context budget."""
+
+    def test_tools_reduce_available_context(self):
+        """With tools, fewer messages should fit in context."""
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": f"tool_{i}__func",
+                    "description": f"Tool number {i} with a detailed description",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "input": {"type": "string", "description": "Input value"},
+                        },
+                    },
+                },
+            }
+            for i in range(20)
+        ]
+
+        mgr = ContextManager(model="gpt-4")
+        messages = [{"role": "user", "content": f"Message number {i} " * 20} for i in range(50)]
+
+        result_no_tools = mgr.build_messages_for_llm("System prompt", messages)
+        result_with_tools = mgr.build_messages_for_llm("System prompt", messages, tools=tools)
+
+        # With tools taking up budget, fewer messages should fit
+        assert len(result_with_tools) <= len(result_no_tools)
+
+
+# =============================================================================
+# Dynamic Context Limits Tests (Sprint 10)
+# =============================================================================
+
+
+class TestDynamicContextLimits:
+    """Tests for dynamic context limits via litellm."""
+
+    def test_known_model_from_map(self):
+        """Known models should return correct limits from our map."""
+        assert get_context_limit("gpt-4o") == 128000
+        assert get_context_limit("claude-3-5-sonnet") == 200000
+
+    def test_gemini_model(self):
+        """Gemini models should be in the map."""
+        limit = get_context_limit("gemini-2-flash")
+        assert limit >= 1000000  # Gemini has 1M+ context
+
+    def test_unknown_model_returns_default(self):
+        """Unknown models should fall back to default."""
+        limit = get_context_limit("totally-unknown-model-xyz")
+        assert limit == 128000  # Default
+
+
+# =============================================================================
+# Panic Mode Tests (Sprint 10)
+# =============================================================================
+
+
+class TestPanicMode:
+    """Tests for _emergency_truncate and panic mode recovery."""
+
+    def test_emergency_truncate_large_content(self):
+        """Large tool results should be truncated."""
+        mgr = ContextManager(model="gpt-4", min_recent_messages=2)
+        messages = [
+            {"role": "system", "content": "System"},
+            {"role": "user", "content": "Request"},
+            {"role": "tool", "content": "x" * 5000, "tool_call_id": "1"},
+            {"role": "user", "content": "Follow up"},
+            {"role": "assistant", "content": "Response"},
+        ]
+
+        result = mgr._emergency_truncate(messages, target_tokens=200)
+
+        # System should be preserved
+        assert result[0]["role"] == "system"
+        # Check that large content was truncated
+        for msg in result:
+            if msg.get("role") == "tool":
+                assert len(msg["content"]) < 5000
+
+    def test_emergency_truncate_drops_middle(self):
+        """When truncation isn't enough, middle messages should be dropped."""
+        mgr = ContextManager(model="gpt-4", min_recent_messages=2)
+        messages = [
+            {"role": "system", "content": "System prompt"},
+            {"role": "system", "content": "Summary of earlier discussion"},
+        ] + [
+            {"role": "user", "content": f"Message {i} " * 100}
+            for i in range(20)
+        ]
+        original_len = len(messages)  # Capture before mutation
+
+        result = mgr._emergency_truncate(messages, target_tokens=500)
+
+        # Should have system prompt and at least min_recent_messages
+        assert result[0]["role"] == "system"
+        assert len(result) < original_len
+
+    def test_panic_mode_activates_on_overflow(self):
+        """build_messages_for_llm should activate panic mode when context overflows."""
+        # Use a model with small context (gpt-4 has 8192)
+        mgr = ContextManager(
+            model="gpt-4",
+            min_recent_messages=2,
+            response_reserve=1000,
+        )
+        # Create messages that would overflow 8192 tokens
+        huge_messages = [
+            {"role": "user", "content": "x " * 3000}
+            for _ in range(10)
+        ]
+
+        result = mgr.build_messages_for_llm("System", huge_messages)
+
+        # Should not exceed context limit
+        total = count_messages_tokens(result, "gpt-4")
+        assert total < mgr.context_limit
+        # Should still have system prompt
+        assert result[0]["role"] == "system"
+
+
+# =============================================================================
+# Circuit Breaker Tests (Sprint 10)
+# =============================================================================
+
+
+class TestCircuitBreaker:
+    """Tests for tool failure circuit breaker in BaseAgentEngine."""
+
+    def test_circuit_breaker_trips(self, sample_agent_config):
+        """Tool should be blocked after consecutive failures."""
+        from unittest.mock import MagicMock
+        from supyagent.core.engine import BaseAgentEngine
+
+        # Create a concrete subclass for testing
+        class TestEngine(BaseAgentEngine):
+            def _get_secrets(self):
+                return {}
+
+        with patch("supyagent.core.engine.discover_tools", return_value=[]):
+            engine = TestEngine(sample_agent_config)
+
+        # Simulate 3 failures
+        engine._tool_failure_counts["test__func"] = 3
+
+        # Next call should be blocked
+        tool_call = MagicMock()
+        tool_call.function.name = "test__func"
+        tool_call.function.arguments = "{}"
+
+        result = engine._dispatch_tool_call(tool_call)
+        assert result["ok"] is False
+        assert result["error_type"] == "circuit_breaker"
+
+    def test_circuit_breaker_resets_on_success(self, sample_agent_config):
+        """Circuit breaker should reset when a tool succeeds."""
+        from supyagent.core.engine import BaseAgentEngine
+
+        class TestEngine(BaseAgentEngine):
+            def _get_secrets(self):
+                return {}
+
+        with patch("supyagent.core.engine.discover_tools", return_value=[]):
+            engine = TestEngine(sample_agent_config)
+
+        # Simulate some failures
+        engine._tool_failure_counts["script__func"] = 2
+
+        # Mock successful execution
+        with patch.object(engine, "_execute_supypowers_tool", return_value={"ok": True, "data": "result"}):
+            tool_call = MagicMock()
+            tool_call.function.name = "script__func"
+            tool_call.function.arguments = '{"arg": "val"}'
+
+            result = engine._dispatch_tool_call(tool_call)
+
+        assert result["ok"] is True
+        assert engine._tool_failure_counts["script__func"] == 0

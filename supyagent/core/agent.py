@@ -109,6 +109,7 @@ class Agent(BaseAgentEngine):
         return self.context_manager.build_messages_for_llm(
             system_prompt,
             conversation_messages,
+            tools=self.tools,
         )
 
     def _dispatch_tool_call(self, tool_call: Any) -> dict[str, Any]:

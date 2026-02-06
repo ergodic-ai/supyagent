@@ -328,3 +328,124 @@ class TestSessionManager:
         assert len(b_sessions) == 1
         assert a_sessions[0].session_id == s1.meta.session_id
         assert b_sessions[0].session_id == s2.meta.session_id
+
+
+class TestSessionManagerAppendOnly:
+    """Tests for append-only session writes (Sprint 10)."""
+
+    def test_title_update_does_not_rewrite_messages(self, sessions_dir):
+        """Title update should only modify the meta line, not all messages."""
+        mgr = SessionManager(base_dir=sessions_dir)
+        session = mgr.create_session("test-agent", "test/model")
+
+        # Add several messages
+        for i in range(20):
+            mgr.append_message(session, Message(type="user", content=f"Message {i}"))
+            mgr.append_message(
+                session, Message(type="assistant", content=f"Response {i}")
+            )
+
+        # Read file lines before title update
+        path = sessions_dir / "test-agent" / f"{session.meta.session_id}.jsonl"
+        before_lines = path.read_text().splitlines()
+
+        # Update title (this triggers _update_meta instead of _save_session)
+        mgr._update_title(session, "New title for testing")
+
+        after_lines = path.read_text().splitlines()
+
+        # Only the first line (meta) should have changed
+        assert before_lines[0] != after_lines[0]  # Meta changed
+        assert before_lines[1:] == after_lines[1:]  # Messages unchanged
+
+    def test_title_in_meta_after_update(self, sessions_dir):
+        """Title should be correctly persisted in meta line."""
+        mgr = SessionManager(base_dir=sessions_dir)
+        session = mgr.create_session("test-agent", "test/model")
+
+        mgr.append_message(session, Message(type="user", content="Hello world!"))
+
+        # Reload and verify title
+        loaded = mgr.load_session("test-agent", session.meta.session_id)
+        assert loaded.meta.title == "Hello world!"
+
+
+class TestSessionManagerSearch:
+    """Tests for session search (Sprint 10)."""
+
+    def test_search_by_keyword(self, sessions_dir):
+        """Search should filter sessions by title keyword."""
+        mgr = SessionManager(base_dir=sessions_dir)
+
+        s1 = mgr.create_session("test-agent", "model")
+        mgr.append_message(s1, Message(type="user", content="How to cook pasta"))
+
+        s2 = mgr.create_session("test-agent", "model")
+        mgr.append_message(s2, Message(type="user", content="Python programming tips"))
+
+        s3 = mgr.create_session("test-agent", "model")
+        mgr.append_message(s3, Message(type="user", content="Best pasta recipes"))
+
+        results = mgr.search_sessions("test-agent", query="pasta")
+        assert len(results) == 2
+
+    def test_search_case_insensitive(self, sessions_dir):
+        """Search should be case-insensitive."""
+        mgr = SessionManager(base_dir=sessions_dir)
+
+        s1 = mgr.create_session("test-agent", "model")
+        mgr.append_message(s1, Message(type="user", content="PYTHON debugging"))
+
+        results = mgr.search_sessions("test-agent", query="python")
+        assert len(results) == 1
+
+    def test_search_no_results(self, sessions_dir):
+        """Search with no matches should return empty list."""
+        mgr = SessionManager(base_dir=sessions_dir)
+        mgr.create_session("test-agent", "model")
+
+        results = mgr.search_sessions("test-agent", query="nonexistent")
+        assert len(results) == 0
+
+    def test_search_no_query_returns_all(self, sessions_dir):
+        """Search with no query should return all sessions."""
+        mgr = SessionManager(base_dir=sessions_dir)
+        mgr.create_session("test-agent", "model")
+        mgr.create_session("test-agent", "model")
+
+        results = mgr.search_sessions("test-agent")
+        assert len(results) == 2
+
+
+class TestSessionManagerDeleteAll:
+    """Tests for delete_all_sessions (Sprint 10)."""
+
+    def test_delete_all_sessions(self, sessions_dir):
+        """Should delete all sessions for an agent."""
+        mgr = SessionManager(base_dir=sessions_dir)
+        mgr.create_session("test-agent", "model")
+        mgr.create_session("test-agent", "model")
+        mgr.create_session("test-agent", "model")
+
+        count = mgr.delete_all_sessions("test-agent")
+        assert count == 3
+
+        # Verify all gone
+        assert len(mgr.list_sessions("test-agent")) == 0
+
+    def test_delete_all_empty(self, sessions_dir):
+        """Delete all with no sessions should return 0."""
+        mgr = SessionManager(base_dir=sessions_dir)
+        count = mgr.delete_all_sessions("test-agent")
+        assert count == 0
+
+    def test_delete_all_clears_current(self, sessions_dir):
+        """Delete all should clear the current session pointer."""
+        mgr = SessionManager(base_dir=sessions_dir)
+        mgr.create_session("test-agent", "model")
+
+        assert mgr.get_current_session("test-agent") is not None
+
+        mgr.delete_all_sessions("test-agent")
+
+        assert mgr.get_current_session("test-agent") is None

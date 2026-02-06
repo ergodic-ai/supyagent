@@ -222,4 +222,4 @@ def execute_process_tool(tool_name: str, args: dict[str, Any]) -> dict[str, Any]
             execute_process_tool_async(tool_name, args)
         )
     except Exception as e:
-        return {"ok": False, "error": f"Process tool failed: {e}"}
+        return {"ok": False, "error": f"Process tool failed: {e}", "error_type": "execution_error"}

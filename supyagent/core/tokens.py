@@ -5,9 +5,13 @@ Uses tiktoken for accurate token estimation. For non-OpenAI models,
 we use cl100k_base as an approximation.
 """
 
+import json
+import logging
 from typing import Any
 
 import tiktoken
+
+logger = logging.getLogger(__name__)
 
 # Model to encoding mapping (approximate for non-OpenAI models)
 MODEL_ENCODINGS = {
@@ -60,7 +64,21 @@ def count_messages_tokens(messages: list[dict[str, Any]], model: str = "default"
     return total
 
 
-# Context window limits (conservative estimates)
+def count_tools_tokens(tools: list[dict[str, Any]], model: str = "default") -> int:
+    """
+    Count tokens consumed by tool definitions.
+
+    Tool definitions are sent as a separate parameter but consume context tokens.
+    We serialize them to JSON and count -- this is an approximation,
+    as the actual token count depends on the provider's serialization.
+    """
+    if not tools:
+        return 0
+    tools_text = json.dumps(tools)
+    return count_tokens(tools_text, model)
+
+
+# Context window limits (conservative fallback estimates)
 CONTEXT_LIMITS = {
     "gpt-4o": 128000,
     "gpt-4-turbo": 128000,
@@ -69,6 +87,14 @@ CONTEXT_LIMITS = {
     "claude-3-5-sonnet": 200000,
     "claude-3-opus": 200000,
     "claude-3-haiku": 200000,
+    "claude-4": 200000,
+    "gemini-2": 1048576,
+    "gemini-3": 1048576,
+    "gemini-1.5": 1048576,
+    "gemini-pro": 32768,
+    "llama": 128000,
+    "mistral": 128000,
+    "qwen": 128000,
     "kimi": 128000,  # Moonshot AI
     "deepseek": 64000,
     "default": 128000,  # Reasonable default for modern models
@@ -76,9 +102,35 @@ CONTEXT_LIMITS = {
 
 
 def get_context_limit(model: str) -> int:
-    """Get the context window limit for a model."""
+    """
+    Get the context window limit for a model.
+
+    Strategy:
+    1. Try LiteLLM's model cost data (most up-to-date)
+    2. Fall back to our hardcoded map
+    3. Fall back to conservative default
+    """
+    # Strategy 1: LiteLLM's model info
+    try:
+        import litellm
+
+        model_info = litellm.get_model_info(model)
+        if model_info and "max_input_tokens" in model_info:
+            return model_info["max_input_tokens"]
+    except Exception:
+        pass
+
+    # Strategy 2: Our hardcoded map (prefix matching)
     model_lower = model.lower()
     for prefix, limit in CONTEXT_LIMITS.items():
         if prefix in model_lower:
             return limit
+
+    # Strategy 3: Conservative default
+    logger.warning(
+        "Unknown model '%s' for context limit. Using default %d. "
+        "Consider adding it to CONTEXT_LIMITS or verifying the model name.",
+        model,
+        CONTEXT_LIMITS["default"],
+    )
     return CONTEXT_LIMITS["default"]

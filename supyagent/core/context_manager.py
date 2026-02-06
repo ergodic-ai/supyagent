@@ -10,18 +10,22 @@ The ContextManager ensures that:
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from supyagent.core.tokens import (
     count_messages_tokens,
     count_tokens,
+    count_tools_tokens,
     get_context_limit,
 )
 from supyagent.models.context import ContextSummary
 
 if TYPE_CHECKING:
     from supyagent.core.llm import LLMClient
+
+logger = logging.getLogger(__name__)
 
 
 class ContextManager:
@@ -100,6 +104,7 @@ class ContextManager:
         self,
         system_prompt: str,
         all_messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the message list to send to the LLM.
@@ -107,11 +112,17 @@ class ContextManager:
         Args:
             system_prompt: The system prompt
             all_messages: All conversation messages (excluding system)
+            tools: Optional tool definitions (for token budget accounting)
 
         Returns:
             Messages list optimized to fit context window
         """
         available_tokens = self.context_limit - self.response_reserve
+
+        # Subtract tool definition tokens from budget
+        if tools:
+            tools_tokens = count_tools_tokens(tools, self.model)
+            available_tokens -= tools_tokens
 
         # Start with system prompt
         messages = [{"role": "system", "content": system_prompt}]
@@ -145,6 +156,63 @@ class ContextManager:
                 break
 
         messages.extend(recent_messages)
+
+        # PANIC MODE: Final safety check against context overflow
+        total_tokens = count_messages_tokens(messages, self.model)
+        if tools:
+            total_tokens += count_tools_tokens(tools, self.model)
+
+        target = self.context_limit - self.response_reserve
+        if total_tokens > target:
+            logger.warning(
+                "Context overflow detected (%d tokens, limit %d). "
+                "Truncating to fit.",
+                total_tokens,
+                self.context_limit,
+            )
+            tools_budget = count_tools_tokens(tools, self.model) if tools else 0
+            messages = self._emergency_truncate(messages, target - tools_budget)
+
+        return messages
+
+    def _emergency_truncate(
+        self,
+        messages: list[dict[str, Any]],
+        target_tokens: int,
+    ) -> list[dict[str, Any]]:
+        """
+        Last-resort truncation when context is still too large.
+
+        Strategy:
+        1. Keep system prompt (index 0)
+        2. Keep summary message (index 1, if exists)
+        3. Keep the last min_recent_messages
+        4. Truncate large tool results in the middle
+        5. Drop oldest non-protected messages
+        """
+        protected_start = 2 if len(messages) > 2 else 1
+        protected_end = min(self.min_recent_messages, len(messages) - protected_start)
+
+        # Try truncating large content in middle messages
+        for i in range(protected_start, len(messages) - protected_end):
+            msg = messages[i]
+            content = msg.get("content", "")
+            if isinstance(content, str) and len(content) > 2000:
+                messages[i] = {
+                    **msg,
+                    "content": content[:1000] + "\n...[truncated]...\n" + content[-500:],
+                }
+
+        # Check if that's enough
+        current = count_messages_tokens(messages, self.model)
+        if current <= target_tokens:
+            return messages
+
+        # Still too big — drop middle messages one by one
+        while current > target_tokens and len(messages) > protected_start + protected_end:
+            messages.pop(protected_start)
+            current = count_messages_tokens(messages, self.model)
+
         return messages
 
     def should_summarize(self, all_messages: list[dict[str, Any]]) -> bool:
@@ -234,6 +302,33 @@ class ContextManager:
         conversation_text = self._format_messages_for_summary(messages_to_summarize)
 
         summary_prompt = f"""Summarize this conversation concisely. Focus on:
+1. Key topics discussed
+2. Important decisions or conclusions
+3. Any tasks completed or pending
+4. Relevant context for continuing the conversation
+
+Keep the summary under 500 words.
+
+Conversation:
+{conversation_text}
+
+Summary:"""
+
+        # Check if summarization prompt fits in context
+        prompt_tokens = count_tokens(summary_prompt, self.model)
+        if prompt_tokens > self.context_limit * 0.8:
+            # Truncate conversation text to fit
+            logger.warning(
+                "Summarization prompt too large (%d tokens, limit %d). Truncating.",
+                prompt_tokens,
+                self.context_limit,
+            )
+            max_chars = int(self.context_limit * 2)  # rough chars-to-tokens ratio
+            conversation_text = (
+                conversation_text[:max_chars]
+                + "\n... [truncated for summarization]"
+            )
+            summary_prompt = f"""Summarize this conversation concisely. Focus on:
 1. Key topics discussed
 2. Important decisions or conclusions
 3. Any tasks completed or pending

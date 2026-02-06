@@ -6,6 +6,8 @@ Sessions are stored as JSONL files with the following format:
 - Subsequent lines: Messages in chronological order
 """
 
+from __future__ import annotations
+
 import json
 from datetime import datetime
 from pathlib import Path
@@ -160,8 +162,34 @@ class SessionManager:
 
         session.meta.title = title
 
-        # Rewrite the session file to update meta
-        self._save_session(session)
+        # Only rewrite the meta line, not the entire file
+        self._update_meta(session)
+
+    def _update_meta(self, session: Session) -> None:
+        """Update only the metadata (first line) of the session file."""
+        path = self._session_path(session.meta.agent, session.meta.session_id)
+        if not path.exists():
+            self._save_session(session)
+            return
+
+        # Read all lines, replace first line (meta), write back
+        with open(path) as f:
+            lines = f.readlines()
+
+        if not lines:
+            self._save_session(session)
+            return
+
+        # Build new meta line
+        meta_dict: dict[str, Any] = session.meta.model_dump()
+        meta_dict["type"] = "meta"
+        meta_dict["created_at"] = session.meta.created_at.isoformat()
+        meta_dict["updated_at"] = session.meta.updated_at.isoformat()
+
+        lines[0] = json.dumps(meta_dict) + "\n"
+
+        with open(path, "w") as f:
+            f.writelines(lines)
 
     def _save_session(self, session: Session) -> None:
         """Save the full session to disk."""
@@ -240,3 +268,53 @@ class SessionManager:
 
             return True
         return False
+
+    def search_sessions(
+        self,
+        agent: str,
+        query: str | None = None,
+        since: datetime | None = None,
+        before: datetime | None = None,
+    ) -> list[SessionMeta]:
+        """
+        Search sessions by keyword in title, or filter by date range.
+
+        Args:
+            agent: Agent name
+            query: Search keyword (matched against title, case-insensitive)
+            since: Only include sessions updated after this time
+            before: Only include sessions updated before this time
+
+        Returns:
+            Filtered list of session metadata
+        """
+        sessions = self.list_sessions(agent)
+        results = []
+
+        for s in sessions:
+            if query and (not s.title or query.lower() not in s.title.lower()):
+                continue
+            if since and s.updated_at < since:
+                continue
+            if before and s.updated_at > before:
+                continue
+            results.append(s)
+
+        return results
+
+    def delete_all_sessions(self, agent: str) -> int:
+        """
+        Delete all sessions for an agent.
+
+        Args:
+            agent: Agent name
+
+        Returns:
+            Number of sessions deleted
+        """
+        sessions = self.list_sessions(agent)
+        count = 0
+        for s in sessions:
+            if self.delete_session(agent, s.session_id):
+                count += 1
+        return count

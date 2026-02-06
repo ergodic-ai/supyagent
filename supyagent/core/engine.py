@@ -8,8 +8,11 @@ Subclasses add their own concerns (session persistence, credential prompting, ou
 from __future__ import annotations
 
 import json
+import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Generator
+
+logger = logging.getLogger(__name__)
 
 from supyagent.core.llm import LLMClient
 from supyagent.core.models import ToolCallObj
@@ -51,10 +54,19 @@ class BaseAgentEngine(ABC):
             model=config.model.provider,
             temperature=config.model.temperature,
             max_tokens=config.model.max_tokens,
+            max_retries=config.model.max_retries,
+            retry_delay=config.model.retry_delay,
+            retry_backoff=config.model.retry_backoff,
         )
 
         self.tools: list[dict[str, Any]] = []
         self.messages: list[dict[str, Any]] = []
+
+        # Circuit breaker: track consecutive tool failures per turn
+        self._tool_failure_counts: dict[str, int] = {}
+        self._tool_failure_threshold: int = config.limits.get(
+            "circuit_breaker_threshold", 3
+        )
 
         # Delegation support
         self.delegation_mgr: DelegationManager | None = None
@@ -112,26 +124,54 @@ class BaseAgentEngine(ABC):
         Route a tool call to the correct handler.
 
         Handles delegation tools, process tools, and supypowers tools.
+        Includes circuit breaker logic for repeated failures.
         Subclasses can override to add credential handling.
         """
         name = tool_call.function.name
 
+        # Circuit breaker: block tools that have failed too many times
+        if self._tool_failure_counts.get(name, 0) >= self._tool_failure_threshold:
+            return {
+                "ok": False,
+                "error": (
+                    f"Tool '{name}' has failed {self._tool_failure_threshold} times "
+                    "consecutively. Please try a different approach or tool."
+                ),
+                "error_type": "circuit_breaker",
+            }
+
         # 1. Delegation tools
         if self.delegation_mgr and self.delegation_mgr.is_delegation_tool(name):
-            return self.delegation_mgr.execute_delegation(tool_call)
+            result = self.delegation_mgr.execute_delegation(tool_call)
+        elif self._is_process_tool(name):
+            # 2. Process management tools
+            from supyagent.core.process_tools import execute_process_tool
 
-        # 2. Process management tools
-        from supyagent.core.process_tools import execute_process_tool, is_process_tool
-
-        if is_process_tool(name):
             try:
                 args = json.loads(tool_call.function.arguments)
             except json.JSONDecodeError:
-                return {"ok": False, "error": "Invalid JSON arguments"}
-            return execute_process_tool(name, args)
+                result = {"ok": False, "error": "Invalid JSON arguments", "error_type": "invalid_args"}
+                self._tool_failure_counts[name] = self._tool_failure_counts.get(name, 0) + 1
+                return result
+            result = execute_process_tool(name, args)
+        else:
+            # 3. Supypowers tools (through supervisor)
+            result = self._execute_supypowers_tool(tool_call)
 
-        # 3. Supypowers tools (through supervisor)
-        return self._execute_supypowers_tool(tool_call)
+        # Track failures for circuit breaker
+        if not result.get("ok", False):
+            self._tool_failure_counts[name] = self._tool_failure_counts.get(name, 0) + 1
+        else:
+            self._tool_failure_counts[name] = 0  # Reset on success
+
+        return result
+
+    @staticmethod
+    def _is_process_tool(name: str) -> bool:
+        """Check if a tool name is a process management tool."""
+        from supyagent.core.process_tools import is_process_tool
+
+        return is_process_tool(name)
 
     def _execute_supypowers_tool(self, tool_call: Any) -> dict[str, Any]:
         """Execute a supypowers tool through the supervisor."""
@@ -140,10 +180,10 @@ class BaseAgentEngine(ABC):
         try:
             args = json.loads(tool_call.function.arguments)
         except json.JSONDecodeError:
-            return {"ok": False, "error": f"Invalid JSON arguments: {tool_call.function.arguments}"}
+            return {"ok": False, "error": f"Invalid JSON arguments: {tool_call.function.arguments}", "error_type": "invalid_args"}
 
         if "__" not in name:
-            return {"ok": False, "error": f"Invalid tool name format: {name}"}
+            return {"ok": False, "error": f"Invalid tool name format: {name}", "error_type": "tool_not_found"}
 
         script, func = name.split("__", 1)
         secrets = self._get_secrets()
@@ -188,66 +228,75 @@ class BaseAgentEngine(ABC):
         Raises:
             MaxIterationsError: If max iterations exceeded
         """
+        # Reset circuit breaker for new turn
+        self._tool_failure_counts.clear()
+
         iterations = 0
         content = ""
 
-        while iterations < max_iterations:
-            iterations += 1
+        try:
+            while iterations < max_iterations:
+                iterations += 1
 
-            messages_for_llm = self._build_messages_for_llm()
+                messages_for_llm = self._build_messages_for_llm()
 
-            response = self.llm.chat(
-                messages=messages_for_llm,
-                tools=self.tools if self.tools else None,
-            )
+                response = self.llm.chat(
+                    messages=messages_for_llm,
+                    tools=self.tools if self.tools else None,
+                )
 
-            msg = response.choices[0].message
-            content = msg.content or ""
-            tool_calls: list[dict[str, Any]] = []
+                msg = response.choices[0].message
+                content = msg.content or ""
+                tool_calls: list[dict[str, Any]] = []
 
-            if msg.tool_calls:
-                tool_calls = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in msg.tool_calls
-                ]
+                if msg.tool_calls:
+                    tool_calls = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in msg.tool_calls
+                    ]
 
-            # Add to full message history
-            msg_dict: dict[str, Any] = {"role": "assistant", "content": content}
-            if tool_calls:
-                msg_dict["tool_calls"] = tool_calls
-            self.messages.append(msg_dict)
+                # Add to full message history
+                msg_dict: dict[str, Any] = {"role": "assistant", "content": content}
+                if tool_calls:
+                    msg_dict["tool_calls"] = tool_calls
+                self.messages.append(msg_dict)
 
-            if on_message:
-                on_message(content, tool_calls)
+                if on_message:
+                    on_message(content, tool_calls)
 
-            # No tool calls → done
-            if not tool_calls:
-                return content
+                # No tool calls → done
+                if not tool_calls:
+                    return content
 
-            # Execute each tool call
-            for tc in tool_calls:
-                tc_obj = ToolCallObj(tc["id"], tc["function"]["name"], tc["function"]["arguments"])
+                # Execute each tool call
+                for tc in tool_calls:
+                    tc_obj = ToolCallObj(tc["id"], tc["function"]["name"], tc["function"]["arguments"])
 
-                if on_tool_start:
-                    on_tool_start(tc["id"], tc["function"]["name"], tc["function"]["arguments"])
+                    if on_tool_start:
+                        on_tool_start(tc["id"], tc["function"]["name"], tc["function"]["arguments"])
 
-                result = self._dispatch_tool_call(tc_obj)
+                    result = self._dispatch_tool_call(tc_obj)
 
-                self.messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": json.dumps(result),
-                })
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": json.dumps(result),
+                    })
 
-                if on_tool_result:
-                    on_tool_result(tc["id"], tc["function"]["name"], result)
+                    if on_tool_result:
+                        on_tool_result(tc["id"], tc["function"]["name"], result)
+
+        except KeyboardInterrupt:
+            logger.info("Interrupted by user during tool loop")
+            self._kill_managed_processes()
+            raise
 
         # Max iterations hit
         raise MaxIterationsError(max_iterations)
@@ -268,6 +317,9 @@ class BaseAgentEngine(ABC):
         - ("_tool_result", (tool_call_id, name, result)): Internal hook for subclass persistence
         - ("done", str): Final complete response
         """
+        # Reset circuit breaker for new turn
+        self._tool_failure_counts.clear()
+
         iterations = 0
         final_content = ""
 
@@ -353,6 +405,21 @@ class BaseAgentEngine(ABC):
                 yield ("_tool_result", (tool_id, tool_name, result))
 
         yield ("done", final_content)
+
+    def _kill_managed_processes(self) -> None:
+        """Kill all running managed processes (cleanup on interrupt)."""
+        try:
+            from supyagent.core.supervisor import get_supervisor, run_supervisor_coroutine
+
+            supervisor = get_supervisor()
+            running = supervisor.list_processes(include_completed=False)
+            for proc in running:
+                try:
+                    run_supervisor_coroutine(supervisor.kill(proc["process_id"]))
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def get_available_tools(self) -> list[str]:
         """Get list of available tool names."""
