@@ -14,8 +14,10 @@ This folder contains detailed sprint plans for building supyagent incrementally.
 | [6](sprint_6_polish.md) | Polish | 3-4 days | Streaming, error handling, docs, production features |
 | [7](sprint_7_context_management.md) | Context Management | 3-4 days | Token counting, summarization, context window limits |
 | [8](sprint_8_process_supervisor.md) | Process Supervisor | 5-6 days | Non-blocking execution, subprocess agents, process management |
+| [9](sprint_9_architecture.md) | Architecture Refactoring | 5-6 days | Unify Agent/Executor, cross-process depth, single execution path |
+| [10](sprint_10_robustness.md) | Robustness & Reliability | 4-5 days | Error handling, token safety, LLM retries, session efficiency |
 
-**Total estimated time: ~26-33 days**
+**Total estimated time: ~35-47 days**
 
 ## Dependency Graph
 
@@ -44,6 +46,12 @@ Sprint 4 (Execution)  │
              │
              ▼
       Sprint 8 (Process Supervisor)
+             │
+             ▼
+      Sprint 9 (Architecture Refactoring)
+             │
+             ▼
+      Sprint 10 (Robustness & Reliability)
 ```
 
 ## How to Use These Sprints
