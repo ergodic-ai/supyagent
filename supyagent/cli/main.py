@@ -52,8 +52,7 @@ def cli(ctx: click.Context, debug: bool):
     Quick start:
 
     \b
-        supyagent init            # Set up default tools
-        supyagent config set      # Configure API keys
+        supyagent hello           # Interactive setup wizard
         supyagent new myagent     # Create an agent
         supyagent chat myagent    # Start chatting
     """
@@ -74,31 +73,19 @@ def cli(ctx: click.Context, debug: bool):
 
 
 @cli.command()
-@click.option(
-    "--tools-dir",
-    "-t",
-    default="powers",
-    help="Directory for tools (default: powers/)",
-)
-@click.option(
-    "--force",
-    "-f",
-    is_flag=True,
-    help="Overwrite existing files",
-)
-def init(tools_dir: str, force: bool):
-    """
-    Initialize supyagent in the current directory.
+def hello():
+    """Interactive setup wizard -- the best way to get started."""
+    from supyagent.cli.hello import run_hello_wizard
 
-    This sets up:
-    - Default tools in powers/ (shell commands, file operations)
-    - agents/ directory for agent configurations
+    run_hello_wizard()
 
-    \b
-    Examples:
-        supyagent init
-        supyagent init --tools-dir my_tools
-    """
+
+# Register 'setup' as an alias for 'hello'
+cli.add_command(hello, name="setup")
+
+
+def _init_quick(tools_dir: str, force: bool) -> None:
+    """Quick init without wizard (original init behavior)."""
     console.print("[bold]Initializing supyagent...[/bold]")
     console.print()
 
@@ -139,6 +126,46 @@ def init(tools_dir: str, force: bool):
     console.print("  1. Configure your API key:  [cyan]supyagent config set[/cyan]")
     console.print("  2. Create an agent:         [cyan]supyagent new myagent[/cyan]")
     console.print("  3. Start chatting:          [cyan]supyagent chat myagent[/cyan]")
+
+
+@cli.command()
+@click.option(
+    "--tools-dir",
+    "-t",
+    default="powers",
+    help="Directory for tools (default: powers/)",
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Overwrite existing files",
+)
+@click.option(
+    "--quick",
+    "-q",
+    is_flag=True,
+    help="Quick init without wizard",
+)
+def init(tools_dir: str, force: bool, quick: bool):
+    """
+    Initialize supyagent. Runs setup wizard by default.
+
+    Use --quick for fast init without the interactive wizard.
+
+    \b
+    Examples:
+        supyagent init              # Interactive wizard
+        supyagent init --quick      # Quick init (directories + tools only)
+        supyagent init --force      # Quick init, overwrite existing
+        supyagent init -t my_tools  # Quick init with custom tools dir
+    """
+    if quick or force or tools_dir != "powers":
+        _init_quick(tools_dir, force)
+    else:
+        from supyagent.cli.hello import run_hello_wizard
+
+        run_hello_wizard()
 
 
 @cli.command()

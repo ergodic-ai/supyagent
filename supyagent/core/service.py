@@ -87,6 +87,36 @@ class ServiceClient:
             logger.warning(f"Invalid response from service: {e}")
             return []
 
+    def list_integrations(self) -> list[dict[str, Any]]:
+        """
+        List user's connected integrations from the service.
+
+        Returns list of dicts with provider, status, connected_at, services.
+        """
+        if not self.api_key:
+            return []
+
+        try:
+            response = self._client.get("/api/v1/integrations")
+            response.raise_for_status()
+            data = response.json()
+            return data.get("integrations", [])
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                logger.warning(
+                    "Service API key is invalid or expired. "
+                    "Run 'supyagent connect' to reconnect."
+                )
+            else:
+                logger.warning(f"Service integration listing failed: {e}")
+            return []
+        except httpx.RequestError as e:
+            logger.warning(f"Could not reach service at {self.base_url}: {e}")
+            return []
+        except (ValueError, KeyError) as e:
+            logger.warning(f"Invalid response from service: {e}")
+            return []
+
     def execute_tool(
         self,
         name: str,
