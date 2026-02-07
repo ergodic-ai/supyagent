@@ -1,6 +1,6 @@
 [project]
 name = "supyagent"
-version = "0.3.1"
+version = "0.3.6"
 description = "LLM agents powered by supypowers - build AI agents with tool use, multi-agent orchestration, and secure credential management"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -43,6 +43,7 @@ dependencies = [
     "cryptography>=41.0",
     "tiktoken>=0.5.0",
     "httpx>=0.25.0",
+    "supypowers>=0.3.2",
 ]
 
 [project.optional-dependencies]

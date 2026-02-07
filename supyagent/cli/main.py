@@ -3143,7 +3143,11 @@ def connect(url: str | None):
         supyagent connect
         supyagent connect --url https://custom.supyagent.com
     """
+    import threading
+    import time
     import webbrowser
+
+    from rich.rule import Rule
 
     from supyagent.core.service import (
         DEFAULT_SERVICE_URL,
@@ -3170,44 +3174,84 @@ def connect(url: str | None):
 
     user_code = device_data["user_code"]
     device_code = device_data["device_code"]
-    verification_uri = device_data.get("verification_uri", f"{base_url}/device")
+    verification_uri = device_data.get("verification_uri") or f"{base_url}/device"
+    # Ensure verification URI uses the correct host (server may return localhost in dev)
+    if "localhost" in verification_uri and "localhost" not in base_url:
+        verification_uri = f"{base_url}/device"
     expires_in = device_data.get("expires_in", 900)
     interval = device_data.get("interval", 5)
 
     # Step 2: Show code and open browser
     console.print()
+    console.print(Rule("Device Authorization", style="blue"))
+    console.print()
     console.print(
         Panel(
-            f"[bold]Code:[/bold] [cyan bold]{user_code}[/cyan bold]\n\n"
-            f"Visit [link={verification_uri}]{verification_uri}[/link] "
-            f"and enter the code above to authorize this device.",
-            title="Device Authorization",
-            border_style="blue",
-        )
+            f"\n[bold white on blue]  {user_code}  [/bold white on blue]\n",
+            title="Your Code",
+            border_style="cyan",
+            padding=(1, 4),
+        ),
+        justify="center",
+    )
+    console.print()
+    console.print(
+        f"  Visit [link={verification_uri}][cyan]{verification_uri}[/cyan][/link] "
+        "and enter the code above to authorize this device.",
     )
     console.print()
 
     try:
         webbrowser.open(verification_uri)
-        console.print("[dim]Browser opened automatically.[/dim]")
+        console.print("[grey62]Browser opened automatically.[/grey62]")
     except Exception:
-        console.print(f"[dim]Open this URL in your browser: {verification_uri}[/dim]")
+        console.print(
+            f"[grey62]Open this URL in your browser: {verification_uri}[/grey62]"
+        )
 
-    # Step 3: Poll for approval
+    # Step 3: Poll for approval with countdown
     console.print()
-    try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            progress.add_task("Waiting for authorization...", total=None)
-            api_key = poll_for_token(
+    result_container: dict[str, Any] = {"key": None, "error": None}
+
+    def _poll() -> None:
+        try:
+            result_container["key"] = poll_for_token(
                 base_url=base_url,
                 device_code=device_code,
                 interval=interval,
                 expires_in=expires_in,
             )
+        except Exception as exc:
+            result_container["error"] = exc
+
+    poll_thread = threading.Thread(target=_poll, daemon=True)
+    poll_thread.start()
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            TextColumn("{task.fields[countdown]}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                "Waiting for authorization...", total=None, countdown=""
+            )
+            start = time.time()
+            while poll_thread.is_alive():
+                remaining = max(0, expires_in - (time.time() - start))
+                minutes = int(remaining // 60)
+                seconds = int(remaining % 60)
+                progress.update(
+                    task,
+                    countdown=f"[bright_black]({minutes}:{seconds:02d} remaining)[/bright_black]",
+                )
+                time.sleep(0.5)
+
+        poll_thread.join()
+        if result_container["error"]:
+            raise result_container["error"]
+        api_key = result_container["key"]
     except TimeoutError:
         console.print("[red]Error:[/red] Device code expired. Please try again.")
         sys.exit(1)
@@ -3218,9 +3262,10 @@ def connect(url: str | None):
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
-    # Step 4: Store credentials
+    # Step 4: Store credentials and show success
     store_service_credentials(api_key, base_url if url else None)
-    console.print("[green]Connected![/green]")
+    console.print()
+    console.print("[bold green]✓ Connected![/bold green]")
     console.print()
 
     # Step 5: Discover and show available tools
@@ -3241,23 +3286,27 @@ def connect(url: str | None):
                 if service and service not in providers[provider]:
                     providers[provider].append(service)
 
-            summary_parts = []
+            tool_table = Table(
+                show_header=True, header_style="bold", box=None, padding=(0, 2)
+            )
+            tool_table.add_column("Provider", style="cyan")
+            tool_table.add_column("Services")
             for provider, services in sorted(providers.items()):
-                if services:
-                    summary_parts.append(f"{provider} ({', '.join(services)})")
-                else:
-                    summary_parts.append(provider)
-
-            console.print(f"[bold]Available integrations:[/bold] {', '.join(summary_parts)}")
-            console.print(f"[dim]{len(tools)} tools total[/dim]")
+                tool_table.add_row(
+                    provider, ", ".join(services) if services else "-"
+                )
+            console.print(tool_table)
+            console.print(
+                f"[bright_black]{len(tools)} tools available[/bright_black]"
+            )
         else:
             console.print(
-                "[dim]No integrations connected yet. "
-                "Visit the dashboard to connect services.[/dim]"
+                "[grey62]No integrations connected yet. "
+                "Visit the dashboard to connect services.[/grey62]"
             )
     except Exception:
         console.print(
-            "[dim]Connected. Run 'supyagent status' to see available tools.[/dim]"
+            "[grey62]Connected. Run 'supyagent status' to see available tools.[/grey62]"
         )
 
 

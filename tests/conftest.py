@@ -2,6 +2,7 @@
 Pytest fixtures for supyagent tests.
 """
 
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -9,6 +10,23 @@ from unittest.mock import MagicMock
 import pytest
 
 from supyagent.models.agent_config import AgentConfig, ModelConfig, ToolPermissions
+
+
+@pytest.fixture(autouse=True)
+def _clean_env():
+    """Prevent environment variable pollution between tests.
+
+    Some CLI commands (chat, run, batch, plan) call load_config() which loads
+    real credentials from ~/.supyagent/config/ into os.environ. Without this
+    fixture, those variables persist across tests, causing failures in tests
+    that expect a clean environment (e.g. test_status_not_connected) and hangs
+    in tests whose input flow depends on whether a service key is present
+    (e.g. test_hello wizard tests).
+    """
+    original_env = os.environ.copy()
+    yield
+    os.environ.clear()
+    os.environ.update(original_env)
 
 
 @pytest.fixture

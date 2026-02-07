@@ -59,8 +59,8 @@ class TestListAgents:
             "    - shell_exec\n"
         )
 
-        # Also need supypowers dir for tool discovery
-        (tmp_path / "supypowers").mkdir()
+        # Also need powers dir for tool discovery
+        (tmp_path / "powers").mkdir()
 
         resp = client.get("/api/agents")
         assert resp.status_code == 200
@@ -93,7 +93,7 @@ class TestGetAgent:
             "tools:\n"
             "  allow: []\n"
         )
-        (tmp_path / "supypowers").mkdir()
+        (tmp_path / "powers").mkdir()
 
         resp = client.get("/api/agents/bot")
         assert resp.status_code == 200
@@ -106,12 +106,12 @@ class TestTools:
     def test_list_tools(self, client, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         # Create a minimal supypowers dir with a tool
-        sp_dir = tmp_path / "supypowers"
+        sp_dir = tmp_path / "powers"
         sp_dir.mkdir()
         (sp_dir / "test_tool.py").write_text(
-            'def test_func(x: str) -> str:\n'
+            "def test_func(x: str) -> str:\n"
             '    """A test tool."""\n'
-            '    return x\n'
+            "    return x\n"
         )
 
         resp = client.get("/api/tools")
@@ -128,7 +128,9 @@ class TestSessions:
         mock_pool = MagicMock()
         mock_pool.session_manager.list_sessions.return_value = []
 
-        with patch("supyagent.server.routes.sessions.get_agent_pool", return_value=mock_pool):
+        with patch(
+            "supyagent.server.routes.sessions.get_agent_pool", return_value=mock_pool
+        ):
             resp = client.get("/api/agents/myagent/sessions")
 
         assert resp.status_code == 200
@@ -138,7 +140,9 @@ class TestSessions:
         mock_pool = MagicMock()
         mock_pool.session_manager.load_session.return_value = None
 
-        with patch("supyagent.server.routes.sessions.get_agent_pool", return_value=mock_pool):
+        with patch(
+            "supyagent.server.routes.sessions.get_agent_pool", return_value=mock_pool
+        ):
             resp = client.get("/api/agents/myagent/sessions/nonexistent")
 
         assert resp.status_code == 404
@@ -147,7 +151,9 @@ class TestSessions:
         mock_pool = MagicMock()
         mock_pool.session_manager.delete_session.return_value = False
 
-        with patch("supyagent.server.routes.sessions.get_agent_pool", return_value=mock_pool):
+        with patch(
+            "supyagent.server.routes.sessions.get_agent_pool", return_value=mock_pool
+        ):
             resp = client.delete("/api/agents/myagent/sessions/nonexistent")
 
         assert resp.status_code == 404
@@ -156,7 +162,9 @@ class TestSessions:
         mock_pool = MagicMock()
         mock_pool.session_manager.delete_session.return_value = True
 
-        with patch("supyagent.server.routes.sessions.get_agent_pool", return_value=mock_pool):
+        with patch(
+            "supyagent.server.routes.sessions.get_agent_pool", return_value=mock_pool
+        ):
             resp = client.delete("/api/agents/myagent/sessions/sess123")
 
         assert resp.status_code == 200
@@ -167,7 +175,9 @@ class TestChat:
     def test_no_user_message(self, client):
         mock_pool = MagicMock()
 
-        with patch("supyagent.server.routes.chat.get_agent_pool", return_value=mock_pool):
+        with patch(
+            "supyagent.server.routes.chat.get_agent_pool", return_value=mock_pool
+        ):
             resp = client.post(
                 "/api/chat",
                 json={
@@ -186,7 +196,9 @@ class TestChat:
         mock_pool = MagicMock()
         mock_pool.get_or_create.side_effect = Exception("Agent 'bad' not found")
 
-        with patch("supyagent.server.routes.chat.get_agent_pool", return_value=mock_pool):
+        with patch(
+            "supyagent.server.routes.chat.get_agent_pool", return_value=mock_pool
+        ):
             resp = client.post(
                 "/api/chat",
                 json={
@@ -216,11 +228,14 @@ class TestChat:
         mock_agent.send_message_stream = fake_stream
 
         import threading
+
         mock_pool = MagicMock()
         mock_pool.get_or_create.return_value = mock_agent
         mock_pool.get_lock.return_value = threading.Lock()
 
-        with patch("supyagent.server.routes.chat.get_agent_pool", return_value=mock_pool):
+        with patch(
+            "supyagent.server.routes.chat.get_agent_pool", return_value=mock_pool
+        ):
             resp = client.post(
                 "/api/chat",
                 json={
@@ -265,27 +280,36 @@ class TestChat:
 
         def fake_stream(msg):
             yield ("text", "Let me check that.")
-            yield ("tool_start", {
-                "id": "call_abc",
-                "name": "shell_exec",
-                "arguments": '{"cmd": "ls"}',
-            })
-            yield ("tool_end", {
-                "id": "call_abc",
-                "name": "shell_exec",
-                "result": "file1.txt\nfile2.txt",
-            })
+            yield (
+                "tool_start",
+                {
+                    "id": "call_abc",
+                    "name": "shell_exec",
+                    "arguments": '{"cmd": "ls"}',
+                },
+            )
+            yield (
+                "tool_end",
+                {
+                    "id": "call_abc",
+                    "name": "shell_exec",
+                    "result": "file1.txt\nfile2.txt",
+                },
+            )
             yield ("text", "Here are your files.")
             yield ("done", "")
 
         mock_agent.send_message_stream = fake_stream
 
         import threading
+
         mock_pool = MagicMock()
         mock_pool.get_or_create.return_value = mock_agent
         mock_pool.get_lock.return_value = threading.Lock()
 
-        with patch("supyagent.server.routes.chat.get_agent_pool", return_value=mock_pool):
+        with patch(
+            "supyagent.server.routes.chat.get_agent_pool", return_value=mock_pool
+        ):
             resp = client.post(
                 "/api/chat",
                 json={
@@ -334,4 +358,6 @@ class TestCORS:
                 "Access-Control-Request-Method": "GET",
             },
         )
-        assert resp.headers.get("access-control-allow-origin") == "http://localhost:3000"
+        assert (
+            resp.headers.get("access-control-allow-origin") == "http://localhost:3000"
+        )

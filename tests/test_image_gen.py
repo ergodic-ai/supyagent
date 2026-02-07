@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # Import the tool module directly (it's a supypowers script, not a package)
-_IMAGE_GEN_PATH = Path(__file__).parent.parent / "supypowers" / "image_gen.py"
+_IMAGE_GEN_PATH = Path(__file__).parent.parent / "powers" / "image_gen.py"
 
 
 @pytest.fixture
@@ -52,7 +52,9 @@ class TestGenerateImage:
         """Successful generation with b64_json response."""
         mock_resp = _mock_image_response(b64_json=TINY_PNG_B64)
 
-        with patch.object(image_gen.litellm, "image_generation", return_value=mock_resp):
+        with patch.object(
+            image_gen.litellm, "image_generation", return_value=mock_resp
+        ):
             inp = image_gen.GenerateImageInput(
                 prompt="a red square",
                 model="dall-e-3",
@@ -105,7 +107,9 @@ class TestGenerateImage:
         img2.url = None
         mock_resp.data = [img1, img2]
 
-        with patch.object(image_gen.litellm, "image_generation", return_value=mock_resp):
+        with patch.object(
+            image_gen.litellm, "image_generation", return_value=mock_resp
+        ):
             inp = image_gen.GenerateImageInput(
                 prompt="two variations",
                 n=2,
@@ -124,7 +128,9 @@ class TestGenerateImage:
         assert not out_dir.exists()
 
         mock_resp = _mock_image_response(b64_json=TINY_PNG_B64)
-        with patch.object(image_gen.litellm, "image_generation", return_value=mock_resp):
+        with patch.object(
+            image_gen.litellm, "image_generation", return_value=mock_resp
+        ):
             inp = image_gen.GenerateImageInput(
                 prompt="test",
                 output_dir=str(out_dir),
@@ -137,7 +143,8 @@ class TestGenerateImage:
     def test_api_error(self, image_gen, tmp_path):
         """API error returns ok=False with error message."""
         with patch.object(
-            image_gen.litellm, "image_generation",
+            image_gen.litellm,
+            "image_generation",
             side_effect=Exception("Rate limit exceeded"),
         ):
             inp = image_gen.GenerateImageInput(
@@ -155,7 +162,8 @@ class TestGenerateImage:
         import litellm
 
         with patch.object(
-            image_gen.litellm, "image_generation",
+            image_gen.litellm,
+            "image_generation",
             side_effect=litellm.AuthenticationError(
                 message="Invalid API key", llm_provider="openai", model="dall-e-3"
             ),
@@ -174,7 +182,9 @@ class TestGenerateImage:
         """Same image content produces same filename (content-hash)."""
         mock_resp = _mock_image_response(b64_json=TINY_PNG_B64)
 
-        with patch.object(image_gen.litellm, "image_generation", return_value=mock_resp):
+        with patch.object(
+            image_gen.litellm, "image_generation", return_value=mock_resp
+        ):
             inp = image_gen.GenerateImageInput(prompt="test", output_dir=str(tmp_path))
             r1 = image_gen.generate_image(inp)
             r2 = image_gen.generate_image(inp)

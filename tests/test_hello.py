@@ -424,7 +424,7 @@ class TestIntegrationPolling:
                 patch("supyagent.cli.hello.ServiceClient", return_value=mock_client),
                 patch("supyagent.cli.hello.Prompt.ask", return_value="done"),
             ])
-            result = _step_integrations(service_connected=True)
+            result = _step_integrations(service_connected=True, statuses={})
 
         assert "google" in result
 
@@ -432,5 +432,5 @@ class TestIntegrationPolling:
         """Integrations skipped when not connected to service."""
         from supyagent.cli.hello import _step_integrations
 
-        result = _step_integrations(service_connected=False)
+        result = _step_integrations(service_connected=False, statuses={})
         assert result == []

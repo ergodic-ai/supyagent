@@ -14,6 +14,8 @@ from typing import Any
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
+from rich.rule import Rule
+from rich.table import Table
 
 from supyagent.core.config import get_config_manager
 from supyagent.core.service import (
@@ -86,22 +88,48 @@ INTEGRATION_PROVIDERS = [
     ("whatsapp", "WhatsApp", "Business messaging"),
 ]
 
+WIZARD_STEPS = [
+    "Project Setup",
+    "Connect to Service",
+    "Connect Integrations",
+    "Choose AI Model",
+    "Create First Agent",
+]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _step_header(step: int, title: str) -> None:
-    """Print a styled step header."""
+def _build_progress_table(statuses: dict[int, str]) -> Table:
+    """Build a compact progress overview for all wizard steps."""
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column(width=3)
+    table.add_column(width=24)
+    table.add_column(width=3)
+    for i, name in enumerate(WIZARD_STEPS, 1):
+        status = statuses.get(i, "pending")
+        if status == "complete":
+            icon = "[green]✓[/green]"
+            style = ""
+        elif status == "active":
+            icon = "[cyan]>[/cyan]"
+            style = "bold"
+        else:
+            icon = "[bright_black]○[/bright_black]"
+            style = "bright_black"
+        table.add_row(f" {i}.", f"[{style}]{name}[/{style}]" if style else name, icon)
+    return table
+
+
+def _step_header(step: int, title: str, statuses: dict[int, str] | None = None) -> None:
+    """Print a styled step header with optional progress overview."""
     console.print()
-    console.print(
-        Panel(
-            f"[bold]{title}[/bold]",
-            title=f"Step {step}",
-            border_style="blue",
-        )
-    )
+    if statuses:
+        console.print(_build_progress_table(statuses))
+        console.print()
+    console.print(Rule(f"[bold]Step {step}[/bold]  {title}", style="blue"))
     console.print()
 
 
@@ -140,44 +168,35 @@ def _detect_state() -> dict[str, Any]:
 
 def _show_status_summary(state: dict[str, Any]) -> None:
     """Show a status summary of the current setup."""
-    lines = []
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column(width=3)
+    table.add_column()
 
-    if state["has_agents_dir"]:
-        lines.append("[green]\\u2713[/green] agents/ directory")
-    else:
-        lines.append("[dim]\\u25cb[/dim] agents/ directory (not created)")
+    def _row(done: bool, label: str) -> None:
+        if done:
+            table.add_row("[green]✓[/green]", label)
+        else:
+            table.add_row("[bright_black]○[/bright_black]", f"[bright_black]{label}[/bright_black]")
 
-    if state["has_tools"]:
-        lines.append("[green]\\u2713[/green] tools installed")
-    else:
-        lines.append("[dim]\\u25cb[/dim] tools (not installed)")
-
-    if state["service_connected"]:
-        lines.append("[green]\\u2713[/green] service connected")
-    else:
-        lines.append("[dim]\\u25cb[/dim] service (not connected)")
+    _row(state["has_agents_dir"], "agents/ directory")
+    _row(state["has_tools"], "tools installed")
+    _row(state["service_connected"], "service connected")
 
     if state["llm_keys"]:
         providers = ", ".join(state["llm_keys"].values())
-        lines.append(f"[green]\\u2713[/green] API keys: {providers}")
+        table.add_row("[green]✓[/green]", f"API keys: {providers}")
     else:
-        lines.append("[dim]\\u25cb[/dim] no LLM API keys configured")
+        _row(False, "no LLM API keys configured")
 
     if state["agent_yamls"]:
         agents = ", ".join(state["agent_yamls"][:5])
         if len(state["agent_yamls"]) > 5:
             agents += f" +{len(state['agent_yamls']) - 5} more"
-        lines.append(f"[green]\\u2713[/green] agents: {agents}")
+        table.add_row("[green]✓[/green]", f"agents: {agents}")
     else:
-        lines.append("[dim]\\u25cb[/dim] no agents created")
+        _row(False, "no agents created")
 
-    console.print(
-        Panel(
-            "\n".join(lines),
-            title="Current Setup",
-            border_style="green",
-        )
-    )
+    console.print(Panel(table, title="Current Setup", border_style="green"))
 
 
 # ---------------------------------------------------------------------------
@@ -185,75 +204,92 @@ def _show_status_summary(state: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _step_project_init() -> None:
+def _step_project_init(statuses: dict[int, str]) -> None:
     """Step 1: Initialize project directories and default tools."""
-    _step_header(1, "Project Setup")
+    statuses[1] = "active"
+    _step_header(1, "Project Setup", statuses)
 
     # Create agents directory
     agents_dir = Path("agents")
     if not agents_dir.exists():
         agents_dir.mkdir(parents=True)
-        console.print("  [green]\\u2713[/green] Created agents/")
+        console.print("  [green]✓[/green] Created agents/")
     else:
-        console.print("  [dim]\\u25cb[/dim] agents/ already exists")
+        console.print("  [bright_black]○ agents/ already exists[/bright_black]")
 
     # Install default tools
     tools_path = Path("powers")
     if tools_path.exists() and any(
         f for f in tools_path.glob("*.py") if f.name != "__init__.py"
     ):
-        console.print("  [dim]\\u25cb[/dim] powers/ already has tools")
+        console.print("  [bright_black]○ powers/ already has tools[/bright_black]")
     else:
         count = install_default_tools(tools_path)
-        console.print(f"  [green]\\u2713[/green] Installed {count} default tools to powers/")
+        console.print(f"  [green]✓[/green] Installed {count} default tools to powers/")
 
     # Show available tools
     console.print()
-    console.print("  [bold]Available tools:[/bold]")
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+    table.add_column("Tool", style="cyan")
+    table.add_column("Description")
     for tool in list_default_tools():
-        console.print(f"    [cyan]{tool['name']}[/cyan]: {tool['description']}")
+        table.add_row(tool["name"], tool["description"])
+    console.print(table)
+
+    statuses[1] = "complete"
 
 
-def _step_service_auth() -> bool:
+def _step_service_auth(statuses: dict[int, str]) -> bool:
     """
     Step 2: Service authentication via device flow.
 
     Returns True if connected (newly or already), False if skipped.
     """
-    _step_header(2, "Connect to Supyagent Service")
+    statuses[2] = "active"
+    _step_header(2, "Connect to Supyagent Service", statuses)
 
     config_mgr = get_config_manager()
     existing_key = config_mgr.get(SERVICE_API_KEY)
 
     if existing_key:
-        console.print("  [green]\\u2713[/green] Already connected to service")
+        console.print("  [green]✓[/green] Already connected to service")
         if not Confirm.ask("  Reconnect?", default=False):
+            statuses[2] = "complete"
             return True
 
     console.print(
-        "  [dim]Supyagent Service gives your agents access to third-party\n"
-        "  integrations like Gmail, Slack, GitHub, and more.[/dim]"
+        "  [grey62]Supyagent Service gives your agents access to third-party\n"
+        "  integrations like Gmail, Slack, GitHub, and more.[/grey62]"
     )
     console.print()
 
     if not Confirm.ask("  Connect to Supyagent Service?", default=True):
-        console.print("  [dim]Skipped. You can connect later with: supyagent connect[/dim]")
+        console.print(
+            "  [grey62]Skipped. You can connect later with: supyagent connect[/grey62]"
+        )
+        statuses[2] = "complete"
         return False
 
     base_url = config_mgr.get(SERVICE_URL) or DEFAULT_SERVICE_URL
 
     # Request device code
     try:
-        console.print("  [dim]Requesting device code...[/dim]")
+        console.print("  [grey62]Requesting device code...[/grey62]")
         device_data = request_device_code(base_url)
     except Exception as e:
         console.print(f"  [yellow]Could not reach service: {e}[/yellow]")
-        console.print("  [dim]You can connect later with: supyagent connect[/dim]")
+        console.print(
+            "  [grey62]You can connect later with: supyagent connect[/grey62]"
+        )
+        statuses[2] = "complete"
         return False
 
     user_code = device_data["user_code"]
     device_code = device_data["device_code"]
-    verification_uri = device_data.get("verification_uri", f"{base_url}/device")
+    verification_uri = device_data.get("verification_uri") or f"{base_url}/device"
+    # Ensure verification URI uses the correct host (server may return localhost in dev)
+    if "localhost" in verification_uri and "localhost" not in base_url:
+        verification_uri = f"{base_url}/device"
     expires_in = device_data.get("expires_in", 900)
     interval = device_data.get("interval", 5)
 
@@ -261,22 +297,26 @@ def _step_service_auth() -> bool:
     console.print()
     console.print(
         Panel(
-            f"[bold]Code:[/bold] [cyan bold]{user_code}[/cyan bold]\n\n"
-            f"Visit [link={verification_uri}]{verification_uri}[/link] "
-            f"and enter the code above.",
-            title="Device Authorization",
-            border_style="blue",
-        )
+            f"\n[bold white on blue]  {user_code}  [/bold white on blue]\n",
+            title="Your Code",
+            border_style="cyan",
+            padding=(1, 4),
+        ),
+        justify="center",
+    )
+    console.print(
+        f"  Visit [link={verification_uri}][cyan]{verification_uri}[/cyan][/link] "
+        "and enter the code above.",
     )
 
     try:
         webbrowser.open(verification_uri)
-        console.print("  [dim]Browser opened automatically.[/dim]")
+        console.print("  [grey62]Browser opened automatically.[/grey62]")
     except Exception:
-        console.print(f"  [dim]Open this URL: {verification_uri}[/dim]")
+        console.print(f"  [grey62]Open this URL: {verification_uri}[/grey62]")
 
     # Poll for approval
-    console.print("  [dim]Waiting for authorization...[/dim]")
+    console.print("  [grey62]Waiting for authorization...[/grey62]")
     try:
         api_key = poll_for_token(
             base_url=base_url,
@@ -286,35 +326,47 @@ def _step_service_auth() -> bool:
         )
     except TimeoutError:
         console.print("  [yellow]Device code expired.[/yellow]")
-        console.print("  [dim]You can connect later with: supyagent connect[/dim]")
+        console.print(
+            "  [grey62]You can connect later with: supyagent connect[/grey62]"
+        )
+        statuses[2] = "complete"
         return False
     except PermissionError:
         console.print("  [yellow]Authorization denied.[/yellow]")
-        console.print("  [dim]You can connect later with: supyagent connect[/dim]")
+        console.print(
+            "  [grey62]You can connect later with: supyagent connect[/grey62]"
+        )
+        statuses[2] = "complete"
         return False
     except Exception as e:
         console.print(f"  [yellow]Error: {e}[/yellow]")
-        console.print("  [dim]You can connect later with: supyagent connect[/dim]")
+        console.print(
+            "  [grey62]You can connect later with: supyagent connect[/grey62]"
+        )
+        statuses[2] = "complete"
         return False
 
     store_service_credentials(api_key, base_url if base_url != DEFAULT_SERVICE_URL else None)
-    console.print("  [green]\\u2713[/green] Connected to service!")
+    console.print("  [green]✓[/green] Connected to service!")
+    statuses[2] = "complete"
     return True
 
 
-def _step_integrations(service_connected: bool) -> list[str]:
+def _step_integrations(service_connected: bool, statuses: dict[int, str]) -> list[str]:
     """
     Step 3: Integration setup.
 
     Returns list of connected provider names.
     """
-    _step_header(3, "Connect Integrations")
+    statuses[3] = "active"
+    _step_header(3, "Connect Integrations", statuses)
 
     if not service_connected:
         console.print(
-            "  [dim]Skipped -- not connected to service.\n"
-            "  Run 'supyagent connect' first, then visit the dashboard.[/dim]"
+            "  [grey62]Skipped -- not connected to service.\n"
+            "  Run 'supyagent connect' first, then visit the dashboard.[/grey62]"
         )
+        statuses[3] = "complete"
         return []
 
     # Get current integrations
@@ -332,21 +384,32 @@ def _step_integrations(service_connected: bool) -> list[str]:
     connected_providers = {i["provider"] for i in current}
 
     console.print(
-        "  [dim]Connect third-party services to give your agents\n"
-        "  access to Gmail, Slack, GitHub, and more.[/dim]"
+        "  [grey62]Connect third-party services to give your agents\n"
+        "  access to Gmail, Slack, GitHub, and more.[/grey62]"
     )
     console.print()
 
-    # Show list
-    for idx, (provider_id, name, desc) in enumerate(INTEGRATION_PROVIDERS, 1):
-        if provider_id in connected_providers:
-            status = "[green]\\u2713 connected[/green]"
-        else:
-            status = "[dim]not connected[/dim]"
-        console.print(f"  [{idx:2d}] {name:<16} {desc:<30} {status}")
+    # Show integration table
+    def _print_integration_table() -> None:
+        table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+        table.add_column("#", style="bold cyan", width=4)
+        table.add_column("Service", width=16)
+        table.add_column("Features", width=30)
+        table.add_column("Status", width=16)
+        for idx, (provider_id, name, desc) in enumerate(INTEGRATION_PROVIDERS, 1):
+            if provider_id in connected_providers:
+                status = "[green]✓ connected[/green]"
+            else:
+                status = "[bright_black]not connected[/bright_black]"
+            table.add_row(str(idx), name, desc, status)
+        console.print(table)
+
+    _print_integration_table()
 
     console.print()
-    console.print("  [dim]Enter a number to connect a service, or 'done' to continue.[/dim]")
+    console.print(
+        "  [grey62]Enter a number to connect a service, or 'done' to continue.[/grey62]"
+    )
     console.print()
 
     while True:
@@ -371,19 +434,19 @@ def _step_integrations(service_connected: bool) -> list[str]:
         provider_id, name, _ = INTEGRATION_PROVIDERS[idx - 1]
 
         if provider_id in connected_providers:
-            console.print(f"  [dim]{name} is already connected.[/dim]")
+            console.print(f"  [grey62]{name} is already connected.[/grey62]")
             continue
 
         # Open dashboard to connect
         connect_url = f"{base_url}/integrations?connect={provider_id}"
-        console.print(f"  [dim]Opening browser to connect {name}...[/dim]")
+        console.print(f"  [grey62]Opening browser to connect {name}...[/grey62]")
         try:
             webbrowser.open(connect_url)
         except Exception:
-            console.print(f"  [dim]Open this URL: {connect_url}[/dim]")
+            console.print(f"  [grey62]Open this URL: {connect_url}[/grey62]")
 
         # Poll for completion
-        console.print(f"  [dim]Waiting for {name} to connect (up to 5 min)...[/dim]")
+        console.print(f"  [grey62]Waiting for {name} to connect (up to 5 min)...[/grey62]")
         deadline = time.time() + 300
         connected = False
         while time.time() < deadline:
@@ -401,37 +464,48 @@ def _step_integrations(service_connected: bool) -> list[str]:
                 pass
 
         if connected:
-            console.print(f"  [green]\\u2713[/green] {name} connected!")
+            console.print(f"  [green]✓[/green] {name} connected!")
         else:
             console.print(
                 f"  [yellow]Timed out waiting for {name}.[/yellow]\n"
-                f"  [dim]You can finish connecting on the dashboard.[/dim]"
+                f"  [grey62]You can finish connecting on the dashboard.[/grey62]"
             )
 
+    statuses[3] = "complete"
     return list(connected_providers)
 
 
-def _step_model_selection() -> str | None:
+def _step_model_selection(statuses: dict[int, str]) -> str | None:
     """
     Step 4: AI model selection.
 
     Returns the selected model string, or None if skipped.
     """
-    _step_header(4, "Choose an AI Model")
+    statuses[4] = "active"
+    _step_header(4, "Choose an AI Model", statuses)
 
     config_mgr = get_config_manager()
 
     provider_names = list(MODEL_PROVIDERS.keys())
 
-    # Show providers
+    # Show providers table
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+    table.add_column("#", style="bold cyan", width=4)
+    table.add_column("Provider", width=14)
+    table.add_column("Status", width=20)
     for idx, name in enumerate(provider_names, 1):
         info = MODEL_PROVIDERS[name]
         key_name = info["key_name"]
         has_key = config_mgr.get(key_name) is not None
-        status = "[green]\\u2713 key configured[/green]" if has_key else "[dim]no key[/dim]"
-        console.print(f"  [{idx}] {name:<14} {status}")
+        status = (
+            "[green]✓ key configured[/green]"
+            if has_key
+            else "[bright_black]no key[/bright_black]"
+        )
+        table.add_row(str(idx), name, status)
+    table.add_row("0", "Custom model", "[bright_black]LiteLLM string[/bright_black]")
+    console.print(table)
 
-    console.print("  [0] Custom model (enter LiteLLM model string)")
     console.print()
 
     # Select provider
@@ -441,24 +515,27 @@ def _step_model_selection() -> str | None:
             default="2",  # Default to Anthropic
         )
     except KeyboardInterrupt:
-        console.print("\n  [dim]Skipped model selection.[/dim]")
+        console.print("\n  [grey62]Skipped model selection.[/grey62]")
+        statuses[4] = "complete"
         return None
 
     if choice == "0":
         # Custom model
         model_id = Prompt.ask("  Model ID (LiteLLM format)")
         if not model_id:
+            statuses[4] = "complete"
             return None
         key_name = Prompt.ask("  API key env var name (e.g. OPENAI_API_KEY)", default="")
         if key_name:
             existing = config_mgr.get(key_name)
             if existing:
-                console.print(f"  [dim]{key_name} already configured.[/dim]")
+                console.print(f"  [grey62]{key_name} already configured.[/grey62]")
             else:
                 value = getpass.getpass(f"  Enter {key_name}: ")
                 if value:
                     config_mgr.set(key_name, value)
-                    console.print(f"  [green]\\u2713[/green] Saved {key_name}")
+                    console.print(f"  [green]✓[/green] Saved {key_name}")
+        statuses[4] = "complete"
         return model_id
 
     try:
@@ -477,14 +554,19 @@ def _step_model_selection() -> str | None:
 
     # Select model within provider
     console.print()
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column("#", style="bold cyan", width=4)
+    table.add_column("Model")
     for midx, (model_id, desc) in enumerate(models, 1):
-        console.print(f"  [{midx}] {desc}")
+        table.add_row(str(midx), desc)
+    console.print(table)
 
     console.print()
     try:
         model_choice = Prompt.ask("  Select model", default="1")
     except KeyboardInterrupt:
-        console.print("\n  [dim]Skipped.[/dim]")
+        console.print("\n  [grey62]Skipped.[/grey62]")
+        statuses[4] = "complete"
         return None
 
     try:
@@ -500,34 +582,39 @@ def _step_model_selection() -> str | None:
     # Ensure API key is set
     existing = config_mgr.get(key_name)
     if existing:
-        console.print(f"  [dim]{key_name} already configured.[/dim]")
+        console.print(f"  [grey62]{key_name} already configured.[/grey62]")
     else:
         console.print()
         value = getpass.getpass(f"  Enter {key_name}: ")
         if value:
             config_mgr.set(key_name, value)
-            console.print(f"  [green]\\u2713[/green] Saved {key_name}")
+            console.print(f"  [green]✓[/green] Saved {key_name}")
         else:
             console.print(
                 f"  [yellow]No key provided.[/yellow] "
                 f"Set it later: [cyan]supyagent config set {key_name}[/cyan]"
             )
 
+    statuses[4] = "complete"
     return selected_model
 
 
 def _step_create_agent(
-    model: str | None, service_connected: bool
+    model: str | None, service_connected: bool, statuses: dict[int, str]
 ) -> str | None:
     """
     Step 5: Create an agent.
 
     Returns the agent name if created, None if skipped.
     """
-    _step_header(5, "Create Your First Agent")
+    statuses[5] = "active"
+    _step_header(5, "Create Your First Agent", statuses)
 
     if not Confirm.ask("  Create an agent now?", default=True):
-        console.print("  [dim]Skipped. Create one later: supyagent new <name>[/dim]")
+        console.print(
+            "  [grey62]Skipped. Create one later: supyagent new <name>[/grey62]"
+        )
+        statuses[5] = "complete"
         return None
 
     # Get description
@@ -556,6 +643,7 @@ def _step_create_agent(
     agent_path = Path("agents") / f"{name}.yaml"
     if agent_path.exists():
         if not Confirm.ask(f"  Agent '{name}' already exists. Overwrite?", default=False):
+            statuses[5] = "complete"
             return None
 
     # Build template
@@ -595,8 +683,9 @@ limits:
 
     Path("agents").mkdir(parents=True, exist_ok=True)
     agent_path.write_text(template)
-    console.print(f"  [green]\\u2713[/green] Created [cyan]agents/{name}.yaml[/cyan]")
+    console.print(f"  [green]✓[/green] Created [cyan]agents/{name}.yaml[/cyan]")
 
+    statuses[5] = "complete"
     return name
 
 
@@ -606,20 +695,25 @@ def _step_summary(
     model: str | None,
     agent_name: str | None,
 ) -> None:
-    """Step 6: Summary and next steps."""
+    """Final summary and next steps."""
     console.print()
 
-    lines = []
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_column(width=3)
+    table.add_column()
 
-    lines.append("[green]\\u2713[/green] Project initialized (agents/ + powers/)")
+    table.add_row("[green]✓[/green]", "Project initialized (agents/ + powers/)")
 
     if service_connected:
-        lines.append("[green]\\u2713[/green] Service connected")
+        table.add_row("[green]✓[/green]", "Service connected")
     else:
-        lines.append("[dim]\\u25cb[/dim] Service not connected")
+        table.add_row(
+            "[bright_black]○[/bright_black]",
+            "[bright_black]Service not connected[/bright_black]",
+        )
 
     if model:
-        lines.append(f"[green]\\u2713[/green] Model: [cyan]{model}[/cyan]")
+        table.add_row("[green]✓[/green]", f"Model: [cyan]{model}[/cyan]")
 
     # Check all configured keys
     config_mgr = get_config_manager()
@@ -628,18 +722,12 @@ def _step_summary(
         if config_mgr.get(pinfo["key_name"]):
             configured.append(pname)
     if configured:
-        lines.append(f"[green]\\u2713[/green] API keys: {', '.join(configured)}")
+        table.add_row("[green]✓[/green]", f"API keys: {', '.join(configured)}")
 
     if agent_name:
-        lines.append(f"[green]\\u2713[/green] Agent: [cyan]{agent_name}[/cyan]")
+        table.add_row("[green]✓[/green]", f"Agent: [cyan]{agent_name}[/cyan]")
 
-    console.print(
-        Panel(
-            "\n".join(lines),
-            title="Setup Complete",
-            border_style="green",
-        )
-    )
+    console.print(Panel(table, title="Setup Complete", border_style="green"))
 
     # Next steps
     console.print()
@@ -674,6 +762,7 @@ def run_hello_wizard() -> None:
 
     # Step 0: Detect existing state
     state = _detect_state()
+    statuses: dict[int, str] = {}
 
     if state["is_setup"]:
         _show_status_summary(state)
@@ -684,41 +773,49 @@ def run_hello_wizard() -> None:
             default="continue",
         )
         if choice == "continue":
-            console.print("  [dim]Nothing to do. Run 'supyagent doctor' to check your setup.[/dim]")
+            console.print(
+                "  [grey62]Nothing to do. "
+                "Run 'supyagent doctor' to check your setup.[/grey62]"
+            )
             return
 
     # Step 1: Project init
     try:
-        _step_project_init()
+        _step_project_init(statuses)
     except KeyboardInterrupt:
-        console.print("\n  [dim]Skipped project init.[/dim]")
+        console.print("\n  [grey62]Skipped project init.[/grey62]")
+        statuses[1] = "complete"
 
     # Step 2: Service auth
     service_connected = state["service_connected"]
     try:
-        service_connected = _step_service_auth()
+        service_connected = _step_service_auth(statuses)
     except KeyboardInterrupt:
-        console.print("\n  [dim]Skipped service connection.[/dim]")
+        console.print("\n  [grey62]Skipped service connection.[/grey62]")
+        statuses[2] = "complete"
 
     # Step 3: Integrations
     try:
-        _step_integrations(service_connected)
+        _step_integrations(service_connected, statuses)
     except KeyboardInterrupt:
-        console.print("\n  [dim]Skipped integrations.[/dim]")
+        console.print("\n  [grey62]Skipped integrations.[/grey62]")
+        statuses[3] = "complete"
 
     # Step 4: Model selection
     model = None
     try:
-        model = _step_model_selection()
+        model = _step_model_selection(statuses)
     except KeyboardInterrupt:
-        console.print("\n  [dim]Skipped model selection.[/dim]")
+        console.print("\n  [grey62]Skipped model selection.[/grey62]")
+        statuses[4] = "complete"
 
     # Step 5: Create agent
     agent_name = None
     try:
-        agent_name = _step_create_agent(model, service_connected)
+        agent_name = _step_create_agent(model, service_connected, statuses)
     except KeyboardInterrupt:
-        console.print("\n  [dim]Skipped agent creation.[/dim]")
+        console.print("\n  [grey62]Skipped agent creation.[/grey62]")
+        statuses[5] = "complete"
 
-    # Step 6: Summary
+    # Summary
     _step_summary(state, service_connected, model, agent_name)
