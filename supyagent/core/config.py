@@ -32,6 +32,7 @@ KNOWN_LLM_KEYS = {
     "GROQ_API_KEY": "Groq",
     "MISTRAL_API_KEY": "Mistral AI",
     "PERPLEXITY_API_KEY": "Perplexity AI",
+    "OPENROUTER_API_KEY": "OpenRouter",
     "DEEPSEEK_API_KEY": "DeepSeek",
     "FIREWORKS_API_KEY": "Fireworks AI",
     "STABILITY_API_KEY": "Stability.ai (Stable Diffusion 3)",

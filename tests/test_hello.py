@@ -177,7 +177,7 @@ class TestHelloCommand:
                 )
 
         assert result.exit_code == 0
-        assert "connect later" in result.output
+        assert "connect anytime" in result.output
 
     def test_hello_service_unreachable(self, tmp_path):
         """Test graceful handling when service is unreachable."""

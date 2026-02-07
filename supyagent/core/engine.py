@@ -67,6 +67,7 @@ class BaseAgentEngine(ABC):
 
         self.tools: list[dict[str, Any]] = []
         self.messages: list[dict[str, Any]] = []
+        self.supypowers_available: bool = False
 
         # Circuit breaker: track consecutive tool failures per turn
         self._tool_failure_counts: dict[str, int] = {}
@@ -112,6 +113,7 @@ class BaseAgentEngine(ABC):
 
         # Discover supypowers tools
         sp_tools = discover_tools()
+        self.supypowers_available = len(sp_tools) > 0
         openai_tools = supypowers_to_openai_tools(sp_tools)
         filtered = filter_tools(openai_tools, self.config.tools)
         tools.extend(filtered)
@@ -154,6 +156,13 @@ class BaseAgentEngine(ABC):
         self._service_tool_metadata.clear()
         self.tools = self._load_base_tools()
         return len(self.tools)
+
+    def _system_prompt_kwargs(self) -> dict[str, Any]:
+        """Get kwargs for get_full_system_prompt based on engine state."""
+        return {
+            "supypowers_available": self.supypowers_available,
+            "has_service": self._service_client is not None,
+        }
 
     def _build_messages_for_llm(self) -> list[dict[str, Any]]:
         """

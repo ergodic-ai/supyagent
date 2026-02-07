@@ -36,11 +36,10 @@ def install_default_tools(target_dir: Path | str = "powers") -> int:
             shutil.copy(tool_file, dest)
             installed += 1
 
-    # Create __init__.py if not exists
+    # Create __init__.py if not exists (not counted as a tool)
     init_file = target / "__init__.py"
     if not init_file.exists():
         init_file.write_text('"""Supypowers tools for this project."""\n')
-        installed += 1
 
     return installed
 

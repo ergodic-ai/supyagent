@@ -131,7 +131,7 @@ class ExecutionRunner(BaseAgentEngine):
                 user_content = str(task)
 
             self.messages = [
-                {"role": "system", "content": get_full_system_prompt(self.config)},
+                {"role": "system", "content": get_full_system_prompt(self.config, **self._system_prompt_kwargs())},
                 {"role": "user", "content": user_content},
             ]
 

@@ -345,7 +345,7 @@ class TestToolsCommands:
         """Test listing tools when no powers dir exists."""
         result = isolated_runner.invoke(cli, ["tools", "list"])
         assert result.exit_code == 0
-        assert "No tools found" in result.output
+        assert "No supypowers tools found" in result.output
 
     def test_tools_new(self, isolated_runner):
         """Test creating a new tool."""

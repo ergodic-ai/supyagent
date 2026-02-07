@@ -126,6 +126,13 @@ def _init_quick(tools_dir: str, force: bool) -> None:
     console.print("  1. Configure your API key:  [cyan]supyagent config set[/cyan]")
     console.print("  2. Create an agent:         [cyan]supyagent new myagent[/cyan]")
     console.print("  3. Start chatting:          [cyan]supyagent chat myagent[/cyan]")
+    console.print()
+    console.print(
+        "[dim]Tip:[/dim] Want your agent to send emails, post to Slack, or create GitHub issues?"
+    )
+    console.print(
+        "     Run [cyan]supyagent connect[/cyan] to unlock 12+ cloud integrations."
+    )
 
 
 @cli.command()
@@ -245,7 +252,13 @@ def new(name: str, agent_type: str, model_provider: str | None, from_agent: str 
         console.print(f"  2. Run: [cyan]supyagent chat {name}[/cyan]")
         return
 
-    # Default model
+    # Default model: CLI flag > config DEFAULT_MODEL > hardcoded fallback
+    if not model_provider:
+        try:
+            cfg = ConfigManager()
+            model_provider = cfg.get("DEFAULT_MODEL")
+        except Exception:
+            pass
     model = model_provider or "anthropic/claude-3-5-sonnet-20241022"
 
     # Create template based on type
@@ -312,7 +325,10 @@ limits:
     console.print()
     console.print("Next steps:")
     console.print(f"  1. Edit [cyan]{agent_path}[/cyan] to customize")
-    console.print(f"  2. Run: [cyan]supyagent chat {name}[/cyan]")
+    if agent_type == "execution":
+        console.print(f'  2. Run: [cyan]supyagent run {name} "your task"[/cyan]')
+    else:
+        console.print(f"  2. Run: [cyan]supyagent chat {name}[/cyan]")
 
 
 @cli.command("list")
@@ -418,12 +434,37 @@ def chat(agent_name: str, new_session: bool, session_id: str | None, verbose: bo
         # Try to resume current session
         session = session_mgr.get_current_session(agent_name)
 
+        # If the session has only a user message with no assistant response,
+        # it likely failed (e.g., auth error). Start fresh instead.
+        if session and session.messages:
+            has_assistant = any(m.type == "assistant" for m in session.messages)
+            if not has_assistant and len(session.messages) <= 1:
+                console.print(
+                    "[dim]Previous session had no responses (possible error). Starting fresh.[/dim]"
+                )
+                session = None
+
     # Initialize agent
     try:
         agent = Agent(config, session=session, session_manager=session_mgr)
     except Exception as e:
         console.print(f"[red]Error initializing agent:[/red] {e}")
         sys.exit(1)
+
+    # Warn if supypowers tools are missing
+    if not agent.supypowers_available:
+        console.print()
+        console.print(
+            "[yellow]Warning:[/yellow] No supypowers tools found. "
+            "Your agent only has built-in tools."
+        )
+        console.print(
+            "  Check that supypowers is installed: "
+            "[cyan]uv tool install supypowers[/cyan]"
+        )
+        console.print(
+            "  Run [cyan]supyagent doctor[/cyan] to diagnose."
+        )
 
     # Print welcome
     console.print()
@@ -1331,20 +1372,21 @@ def doctor():
         import subprocess
 
         result = subprocess.run(
-            ["supypowers", "--version"],
+            ["supypowers", "docs", "--help"],
             capture_output=True,
             text=True,
             timeout=5,
         )
         if result.returncode == 0:
-            ver = result.stdout.strip()
-            console.print(f"[green]  ✓[/green] supypowers installed ({ver})")
+            console.print("[green]  ✓[/green] supypowers installed")
         else:
-            console.print(f"[red]  x[/red] supypowers not working (exit code {result.returncode})")
+            console.print(
+                f"[red]  x[/red] supypowers not working (exit code {result.returncode})"
+            )
             all_ok = False
     except FileNotFoundError:
         console.print("[red]  x[/red] supypowers not installed")
-        console.print("    Install: [cyan]pip install supypowers[/cyan]")
+        console.print("    Install: [cyan]uv tool install supypowers[/cyan]")
         all_ok = False
     except Exception as e:
         console.print(f"[yellow]  ![/yellow] supypowers check failed: {e}")
@@ -1437,6 +1479,51 @@ def doctor():
 # Tools Commands
 # =============================================================================
 
+# Cloud tools shown when user isn't connected to supyagent service
+_CLOUD_TOOL_PREVIEWS = [
+    ("gmail__send_message", "Send an email via Gmail"),
+    ("gmail__list_messages", "List recent emails from Gmail"),
+    ("slack__post_message", "Post a message to a Slack channel"),
+    ("slack__list_channels", "List available Slack channels"),
+    ("github__create_issue", "Create a GitHub issue"),
+    ("github__list_repos", "List GitHub repositories"),
+    ("google_calendar__list_events", "List upcoming calendar events"),
+    ("google_calendar__create_event", "Create a calendar event"),
+    ("google_drive__list_files", "List files in Google Drive"),
+    ("discord__send_message", "Send a message to a Discord channel"),
+    ("notion__search", "Search across Notion pages"),
+    ("telegram__send_message", "Send a Telegram message"),
+]
+
+
+def _show_cloud_tools_status() -> None:
+    """Show cloud tools as connected or locked depending on service status."""
+    try:
+        from supyagent.core.service import get_service_client
+
+        client = get_service_client()
+        if client:
+            # Connected — show discovered cloud tools count
+            tools = client.discover_tools()
+            if tools:
+                console.print(f"\n[green]Cloud tools: {len(tools)} available[/green] (via supyagent service)")
+                return
+    except Exception:
+        pass
+
+    # Not connected — show preview of what's available
+    console.print()
+    console.print(
+        "[dim]Cloud tools (run [cyan]supyagent connect[/cyan] to unlock):[/dim]"
+    )
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column(style="dim")
+    table.add_column(style="dim")
+    for name, desc in _CLOUD_TOOL_PREVIEWS:
+        table.add_row(f"  🔒 {name}", desc)
+    console.print(table)
+    console.print(f"  [dim]... and 50+ more across 12 providers[/dim]")
+
 
 @cli.group("tools")
 def tools_group():
@@ -1463,39 +1550,51 @@ def tools_list(agent_name: str | None):
     sp_tools = discover_tools()
 
     if not sp_tools:
-        console.print("[yellow]No tools found.[/yellow]")
-        console.print("Run [cyan]supyagent init[/cyan] to install default tools.")
-        return
-
-    openai_tools = supypowers_to_openai_tools(sp_tools)
-
-    # Filter by agent permissions if specified
-    if agent_name:
-        try:
-            config = load_agent_config(agent_name)
-            openai_tools = filter_tools(openai_tools, config.tools)
-            console.print(f"[dim]Tools available to '{agent_name}':[/dim]\n")
-        except (AgentNotFoundError, AgentConfigError) as e:
-            console.print(f"[red]Error:[/red] {e}")
-            sys.exit(1)
+        console.print("[yellow]No supypowers tools found.[/yellow]")
+        console.print()
+        console.print("Possible causes:")
+        console.print(
+            "  - supypowers not installed: [cyan]uv tool install supypowers[/cyan]"
+        )
+        console.print("  - supypowers not on PATH: check [cyan]which supypowers[/cyan]")
+        console.print(
+            "  - No powers/ directory: run [cyan]supyagent init[/cyan]"
+        )
+        # Still show cloud tools below
+        openai_tools = []
     else:
-        console.print("[dim]All discovered tools:[/dim]\n")
+        openai_tools = supypowers_to_openai_tools(sp_tools)
 
-    table = Table()
-    table.add_column("Tool", style="cyan")
-    table.add_column("Description")
+        # Filter by agent permissions if specified
+        if agent_name:
+            try:
+                config = load_agent_config(agent_name)
+                openai_tools = filter_tools(openai_tools, config.tools)
+                console.print(f"[dim]Tools available to '{agent_name}':[/dim]\n")
+            except (AgentNotFoundError, AgentConfigError) as e:
+                console.print(f"[red]Error:[/red] {e}")
+                sys.exit(1)
+        else:
+            console.print("[dim]All discovered tools:[/dim]\n")
 
-    for tool in openai_tools:
-        func = tool.get("function", {})
-        name = func.get("name", "unknown")
-        desc = func.get("description", "")
-        # Truncate long descriptions
-        if len(desc) > 70:
-            desc = desc[:67] + "..."
-        table.add_row(name, desc)
+        table = Table()
+        table.add_column("Tool", style="cyan")
+        table.add_column("Description")
 
-    console.print(table)
-    console.print(f"\n[dim]{len(openai_tools)} tools total[/dim]")
+        for tool in openai_tools:
+            func = tool.get("function", {})
+            name = func.get("name", "unknown")
+            desc = func.get("description", "")
+            # Truncate long descriptions
+            if len(desc) > 70:
+                desc = desc[:67] + "..."
+            table.add_row(name, desc)
+
+        console.print(table)
+        console.print(f"\n[dim]{len(openai_tools)} local tools[/dim]")
+
+    # Show cloud tools status
+    _show_cloud_tools_status()
 
 
 @tools_group.command("new")

@@ -71,7 +71,7 @@ class Agent(BaseAgentEngine):
                 config.name, config.model.provider
             )
             self.messages = [
-                {"role": "system", "content": get_full_system_prompt(config)}
+                {"role": "system", "content": get_full_system_prompt(config, **self._system_prompt_kwargs())}
             ]
 
         # Initialize context manager for handling long conversations
@@ -112,7 +112,7 @@ class Agent(BaseAgentEngine):
 
     def _build_messages_for_llm(self) -> list[dict[str, Any]]:
         """Apply context trimming via ContextManager."""
-        system_prompt = get_full_system_prompt(self.config)
+        system_prompt = get_full_system_prompt(self.config, **self._system_prompt_kwargs())
         conversation_messages = [m for m in self.messages if m.get("role") != "system"]
         return self.context_manager.build_messages_for_llm(
             system_prompt,
@@ -135,7 +135,7 @@ class Agent(BaseAgentEngine):
     def _reconstruct_messages(self, session: Session) -> list[dict[str, Any]]:
         """Reconstruct LLM message format from session history."""
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": get_full_system_prompt(self.config)}
+            {"role": "system", "content": get_full_system_prompt(self.config, **self._system_prompt_kwargs())}
         ]
         media_dir = self._get_media_dir()
 
@@ -325,5 +325,5 @@ class Agent(BaseAgentEngine):
             self.config.name, self.config.model.provider
         )
         self.messages = [
-            {"role": "system", "content": get_full_system_prompt(self.config)}
+            {"role": "system", "content": get_full_system_prompt(self.config, **self._system_prompt_kwargs())}
         ]

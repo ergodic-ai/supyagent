@@ -316,14 +316,74 @@ def call_api(input: ApiInput) -> ApiOutput:
 After creating the tool, it will be automatically available for use.
 """
 
+AGENT_RESILIENCE_INSTRUCTIONS = """
 
-def get_full_system_prompt(config: "AgentConfig") -> str:
+---
+
+## When tools are not available
+
+If you have no file, shell, or web tools available (only built-in process management tools):
+- Tell the user: "I don't have filesystem or shell tools loaded. This usually means supypowers \
+is not installed or not on PATH. Run `supyagent doctor` to diagnose, or try `/reload` to refresh \
+tools."
+- Do NOT attempt to work around missing tools by calling unrelated built-in tools \
+(list_processes, get_process_output, etc.).
+- Do NOT ask the user to manually create Python files for you.
+
+If a tool call fails with "command not found" or a similar execution error:
+- Report the specific error clearly.
+- Suggest: "Try running `supyagent doctor` to check your setup."
+"""
+
+CLOUD_SERVICE_INSTRUCTIONS = """
+
+---
+
+## Cloud integrations
+
+If the user asks you to perform an action that requires a third-party service \
+(sending emails, posting to Slack/Discord, creating GitHub issues, reading Google Calendar, \
+managing contacts, etc.) and you don't have those tools available:
+- Tell the user: "This requires the {service} integration. You can connect it by running \
+`supyagent connect` and enabling it on your dashboard."
+- Do NOT attempt to work around it with shell commands, web scraping, or manual API calls.
+- If you're unsure whether a tool exists for the request, check your available tools first \
+before suggesting the user connect.
+"""
+
+THINKING_GUIDELINES = """
+
+---
+
+## Thinking guidelines
+
+When reasoning through a problem:
+- State what you're about to do and why.
+- If you're unsure about something, say what you need from the user rather than guessing \
+or trying random approaches.
+- Be direct and decisive. If something isn't working, explain the issue clearly and suggest \
+a concrete next step.
+"""
+
+
+def get_full_system_prompt(
+    config: "AgentConfig",
+    *,
+    supypowers_available: bool = True,
+    has_service: bool = False,
+) -> str:
     """
-    Get the full system prompt, including tool creation instructions if enabled.
+    Get the full system prompt, including tool creation instructions if enabled,
+    resilience instructions, and cloud service awareness.
     """
     prompt = config.system_prompt
     if config.will_create_tools:
         prompt += TOOL_CREATION_INSTRUCTIONS
+    prompt += THINKING_GUIDELINES
+    if not supypowers_available:
+        prompt += AGENT_RESILIENCE_INSTRUCTIONS
+    if not has_service:
+        prompt += CLOUD_SERVICE_INSTRUCTIONS
     return prompt
 
 

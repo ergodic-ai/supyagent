@@ -258,14 +258,25 @@ def _step_service_auth(statuses: dict[int, str]) -> bool:
             return True
 
     console.print(
-        "  [grey62]Supyagent Service gives your agents access to third-party\n"
-        "  integrations like Gmail, Slack, GitHub, and more.[/grey62]"
+        "  [grey62]Supyagent Service lets your agents interact with real services:[/grey62]"
+    )
+    console.print(
+        "  [grey62]  - Send and read emails (Gmail, Outlook)[/grey62]"
+    )
+    console.print(
+        "  [grey62]  - Post messages to Slack, Discord, Telegram[/grey62]"
+    )
+    console.print(
+        "  [grey62]  - Create GitHub issues, manage repos[/grey62]"
+    )
+    console.print(
+        "  [grey62]  - Manage Google Calendar, Drive, and more[/grey62]"
     )
     console.print()
 
     if not Confirm.ask("  Connect to Supyagent Service?", default=True):
         console.print(
-            "  [grey62]Skipped. You can connect later with: supyagent connect[/grey62]"
+            "  [grey62]Skipped. You can connect anytime with: supyagent connect[/grey62]"
         )
         statuses[2] = "complete"
         return False
@@ -508,11 +519,18 @@ def _step_model_selection(statuses: dict[int, str]) -> str | None:
 
     console.print()
 
+    # Find a smart default: first provider with a key configured, else Anthropic
+    default_idx = 2  # Anthropic
+    for i, name in enumerate(provider_names, 1):
+        if config_mgr.get(MODEL_PROVIDERS[name]["key_name"]) is not None:
+            default_idx = i
+            break
+
     # Select provider
     try:
         choice = Prompt.ask(
             "  Select provider",
-            default="2",  # Default to Anthropic
+            default=str(default_idx),
         )
     except KeyboardInterrupt:
         console.print("\n  [grey62]Skipped model selection.[/grey62]")
@@ -538,14 +556,23 @@ def _step_model_selection(statuses: dict[int, str]) -> str | None:
         statuses[4] = "complete"
         return model_id
 
+    # Accept both numbers and provider names (case-insensitive)
+    idx = None
     try:
         idx = int(choice)
         if idx < 1 or idx > len(provider_names):
-            console.print("  [yellow]Invalid selection, using default.[/yellow]")
-            idx = 2
+            idx = None
     except ValueError:
-        console.print("  [yellow]Invalid selection, using default.[/yellow]")
-        idx = 2
+        # Try matching by name
+        choice_lower = choice.lower()
+        for i, name in enumerate(provider_names, 1):
+            if name.lower() == choice_lower or name.lower().startswith(choice_lower):
+                idx = i
+                break
+
+    if idx is None:
+        console.print(f"  [yellow]Invalid selection, using default ({provider_names[default_idx - 1]}).[/yellow]")
+        idx = default_idx
 
     provider_name = provider_names[idx - 1]
     provider_info = MODEL_PROVIDERS[provider_name]
