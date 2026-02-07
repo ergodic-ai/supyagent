@@ -45,3 +45,6 @@ ENV/
 .coverage
 htmlcov/
 .envsupyagent
+
+
+build_and_deploy.sh
