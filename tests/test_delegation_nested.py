@@ -1192,7 +1192,7 @@ class TestEdgeCases:
                 result = manager.execute_delegation(mock_tool_call)
 
         assert result["ok"] is False
-        assert "Subprocess delegation failed" in result["error"]
+        assert "Delegation to 'child' failed" in result["error"]
 
     def test_empty_task_delegation(self, temp_dir):
         """Delegating with an empty task should still work (LLM decides)."""

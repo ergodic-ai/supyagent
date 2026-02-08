@@ -357,11 +357,13 @@ THINKING_GUIDELINES = """
 
 ## Thinking guidelines
 
-When reasoning through a problem:
-- State what you're about to do and why.
-- If you're unsure about something, say what you need from the user rather than guessing \
-or trying random approaches.
-- Be direct and decisive. If something isn't working, explain the issue clearly and suggest \
+Your thinking is visible to the user. Make it useful:
+- State your plan concisely: what you will do and in what order.
+- Show relevant reasoning: calculations, comparisons, trade-offs.
+- If you are uncertain, state what information would help rather than guessing.
+- Never narrate your own confusion or indecision.
+- Keep thinking under 3-4 sentences unless the problem is genuinely complex.
+- Be direct and decisive. If something is not working, explain the issue clearly and suggest \
 a concrete next step.
 """
 

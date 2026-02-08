@@ -309,6 +309,8 @@ class DelegationManager:
         timeout: float,
     ) -> dict[str, Any]:
         """Delegate via subprocess using the ProcessSupervisor."""
+        import time as _time
+
         from supyagent.core.supervisor import get_supervisor, run_supervisor_coroutine
 
         # Calculate child depth: current cross-process depth + in-process depth + 1
@@ -329,9 +331,10 @@ class DelegationManager:
         ]
 
         supervisor = get_supervisor()
+        start = _time.monotonic()
 
         try:
-            return run_supervisor_coroutine(
+            result = run_supervisor_coroutine(
                 supervisor.execute(
                     cmd,
                     process_type="agent",
@@ -341,8 +344,21 @@ class DelegationManager:
                     metadata={"agent_name": agent_name, "task": full_task[:200]},
                 )
             )
+            elapsed = _time.monotonic() - start
+            if result.get("ok") and isinstance(result.get("data"), str):
+                result["_delegation_meta"] = {
+                    "agent": agent_name,
+                    "duration_s": round(elapsed, 1),
+                }
+            return result
         except Exception as e:
-            return {"ok": False, "error": f"Subprocess delegation failed: {e}"}
+            return {
+                "ok": False,
+                "error": (
+                    f"Delegation to '{agent_name}' failed: {e}. "
+                    "The agent may not exist or may have encountered an error."
+                ),
+            }
 
     def _delegate_in_process(
         self,
@@ -375,7 +391,13 @@ class DelegationManager:
                 return {"ok": True, "data": response}
 
         except Exception as e:
-            return {"ok": False, "error": f"Delegation failed: {str(e)}"}
+            return {
+                "ok": False,
+                "error": (
+                    f"Delegation to '{agent_name}' failed: {e}. "
+                    "Check that the agent config is valid and the model is accessible."
+                ),
+            }
 
     def _spawn_agent(
         self,

@@ -428,6 +428,7 @@ class SessionManager:
             "",
         ]
 
+        prev_role = None
         for msg in session.messages:
             content_text = msg.content
             if isinstance(content_text, list):
@@ -435,14 +436,24 @@ class SessionManager:
 
             if msg.type == "user":
                 lines.append(f"**You:** {content_text}\n")
+                prev_role = "user"
             elif msg.type == "assistant":
-                lines.append(f"**{agent}:** {content_text}\n")
+                # Skip empty assistant messages (e.g. thinking-only or empty before tool calls)
+                if not content_text or not content_text.strip():
+                    continue
+                # Collapse consecutive assistant messages into one block
+                if prev_role == "assistant":
+                    lines.append(f"{content_text}\n")
+                else:
+                    lines.append(f"**{agent}:** {content_text}\n")
+                prev_role = "assistant"
             elif msg.type == "tool_result":
                 tool_name = msg.name or "unknown"
                 preview = (content_text or "")[:200]
                 if len(content_text or "") > 200:
                     preview += "..."
                 lines.append(f"> *Tool: {tool_name}*  \n> {preview}\n")
+                prev_role = "tool_result"
 
         return "\n".join(lines)
 

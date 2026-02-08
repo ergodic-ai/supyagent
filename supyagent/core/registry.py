@@ -232,6 +232,39 @@ class AgentRegistry:
 
         return len(to_remove)
 
+    def prune_stale(self, max_age_hours: float = 24) -> int:
+        """
+        Remove stale entries: 'active' instances older than max_age_hours.
+
+        These are typically leftover from crashed processes.
+
+        Returns:
+            Number of instances removed
+        """
+        cutoff = datetime.now(UTC) - __import__("datetime").timedelta(hours=max_age_hours)
+        to_remove = [
+            iid
+            for iid, inst in self._instances.items()
+            if inst.status == "active" and inst.created_at < cutoff
+        ]
+
+        for iid in to_remove:
+            self.cleanup(iid)
+
+        return len(to_remove)
+
+    def stats(self) -> dict[str, int]:
+        """Return a summary of registry state."""
+        active = sum(1 for i in self._instances.values() if i.status == "active")
+        completed = sum(1 for i in self._instances.values() if i.status == "completed")
+        failed = sum(1 for i in self._instances.values() if i.status == "failed")
+        return {
+            "total": len(self._instances),
+            "active": active,
+            "completed": completed,
+            "failed": failed,
+        }
+
     def get_depth(self, instance_id: str) -> int:
         """Get the delegation depth of an instance."""
         inst = self._instances.get(instance_id)

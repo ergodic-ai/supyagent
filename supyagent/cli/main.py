@@ -38,6 +38,45 @@ from supyagent.models.agent_config import (
 console = Console()
 console_err = Console(stderr=True)
 
+_KNOWN_MODEL_PREFIXES = (
+    "anthropic/",
+    "openai/",
+    "openrouter/",
+    "google/",
+    "azure/",
+    "deepseek/",
+    "groq/",
+    "together_ai/",
+    "replicate/",
+    "ollama/",
+    "bedrock/",
+    "vertex_ai/",
+    "mistral/",
+    "cohere/",
+    "fireworks_ai/",
+    "huggingface/",
+)
+
+
+def _warn_model_provider(provider: str) -> None:
+    """Print a warning if the model provider string looks invalid."""
+    if "/" not in provider:
+        console.print(
+            f"[yellow]Warning:[/yellow] Model '{provider}' has no provider prefix."
+        )
+        console.print(
+            "  Expected format: [cyan]provider/model-name[/cyan] "
+            "(e.g., openrouter/google/gemini-2.5-flash)"
+        )
+    elif not any(provider.startswith(p) for p in _KNOWN_MODEL_PREFIXES):
+        prefix = provider.split("/")[0]
+        console.print(
+            f"[yellow]Note:[/yellow] Provider prefix '{prefix}/' is not in the common list."
+        )
+        console.print(
+            "  It may still work if LiteLLM supports it or you have a custom endpoint."
+        )
+
 
 @click.group()
 @click.version_option(version=_version, prog_name="supyagent")
@@ -95,7 +134,7 @@ def _init_quick(tools_dir: str, force: bool) -> None:
         agents_dir.mkdir(parents=True)
         console.print(f"  [green]✓[/green] Created {agents_dir}/")
     else:
-        console.print(f"  [dim]○[/dim] {agents_dir}/ already exists")
+        console.print(f"  [bright_black]○[/bright_black] {agents_dir}/ already exists")
 
     # Install default tools
     tools_path = Path(tools_dir)
@@ -108,7 +147,7 @@ def _init_quick(tools_dir: str, force: bool) -> None:
             shutil.rmtree(tools_path)
 
     if tools_path.exists() and any(tools_path.glob("*.py")):
-        console.print(f"  [dim]○[/dim] {tools_dir}/ already has tools")
+        console.print(f"  [bright_black]○[/bright_black] {tools_dir}/ already has tools")
     else:
         count = install_default_tools(tools_path)
         console.print(
@@ -260,6 +299,7 @@ def new(name: str, agent_type: str, model_provider: str | None, from_agent: str 
         except Exception:
             pass
     model = model_provider or "anthropic/claude-3-5-sonnet-20241022"
+    _warn_model_provider(model)
 
     # Create template based on type
     if agent_type == "interactive":
@@ -372,7 +412,8 @@ def list_agents():
 @click.option("--new", "new_session", is_flag=True, help="Start a new session")
 @click.option("--session", "session_id", help="Resume a specific session by ID")
 @click.option("--verbose", "-v", is_flag=True, help="Show tool call details and token usage")
-def chat(agent_name: str, new_session: bool, session_id: str | None, verbose: bool):
+@click.option("--dry-run", is_flag=True, help="Show system prompt and tool schemas, then exit")
+def chat(agent_name: str, new_session: bool, session_id: str | None, verbose: bool, dry_run: bool):
     """
     Start an interactive chat session with an agent.
 
@@ -399,6 +440,9 @@ def chat(agent_name: str, new_session: bool, session_id: str | None, verbose: bo
                 "  [dim](none - create one with 'supyagent new <name>')[/dim]"
             )
         sys.exit(1)
+
+    # Warn about model provider issues early
+    _warn_model_provider(config.model.provider)
 
     # Initialize session manager
     session_mgr = SessionManager()
@@ -450,6 +494,31 @@ def chat(agent_name: str, new_session: bool, session_id: str | None, verbose: bo
     except Exception as e:
         console.print(f"[red]Error initializing agent:[/red] {e}")
         sys.exit(1)
+
+    # Dry-run: show config and exit
+    if dry_run:
+        from supyagent.models.agent_config import get_full_system_prompt
+
+        full_prompt = get_full_system_prompt(
+            config, **agent._system_prompt_kwargs()
+        )
+        console.print(f"\n[bold]Agent:[/bold] {config.name} ({config.type})")
+        console.print(f"[bold]Model:[/bold] {config.model.provider}")
+        console.print(f"[bold]Tools:[/bold] {len(agent.tools)} available\n")
+
+        console.print("[bold]System Prompt:[/bold]")
+        console.print(Panel(full_prompt, border_style="dim", expand=False))
+
+        if agent.tools:
+            console.print(f"\n[bold]Tool Schemas ({len(agent.tools)}):[/bold]")
+            for tool in agent.tools:
+                func = tool.get("function", {})
+                name = func.get("name", "?")
+                desc = func.get("description", "")
+                if len(desc) > 80:
+                    desc = desc[:77] + "..."
+                console.print(f"  [cyan]{name}[/cyan]: {desc}")
+        return
 
     # Warn if supypowers tools are missing
     if not agent.supypowers_available:
@@ -529,7 +598,7 @@ def chat(agent_name: str, new_session: bool, session_id: str | None, verbose: bo
                         "  /session <id>      Switch to another session\n"
                         "  /new               Start a new session\n"
                         "  /delete [id]       Delete a session (default: current)\n"
-                        "  /rename <title>    Rename the current session\n"
+                        "  /rename <title>    Set a display title for the current session\n"
                         "  /history [n]       Show last n messages (default: 10)\n"
                         "  /context           Show context window usage and status\n"
                         "  /tokens            Toggle token usage display after each turn\n"
@@ -555,8 +624,8 @@ def chat(agent_name: str, new_session: bool, session_id: str | None, verbose: bo
                     continue
 
                 elif cmd == "sessions":
-                    sessions = session_mgr.list_sessions(agent_name)
-                    if not sessions:
+                    all_sessions = session_mgr.list_sessions(agent_name)
+                    if not all_sessions:
                         console.print("[dim]No sessions found[/dim]")
                     else:
                         table = Table(title="Sessions")
@@ -567,16 +636,21 @@ def chat(agent_name: str, new_session: bool, session_id: str | None, verbose: bo
                         table.add_column("", style="green")
 
                         current_id = agent.session.meta.session_id
-                        for s in sessions:
+                        hidden_count = 0
+                        for s in all_sessions:
                             marker = "← current" if s.session_id == current_id else ""
                             title = s.title or "(untitled)"
                             updated = s.updated_at.strftime("%Y-%m-%d %H:%M")
-                            # Count messages
                             loaded = session_mgr.load_session(agent_name, s.session_id)
-                            msg_count = str(len(loaded.messages)) if loaded else "?"
-                            table.add_row(s.session_id, title, msg_count, updated, marker)
+                            msg_count = len(loaded.messages) if loaded else 0
+                            if msg_count < 2 and s.session_id != current_id:
+                                hidden_count += 1
+                                continue
+                            table.add_row(s.session_id, title, str(msg_count), updated, marker)
 
                         console.print(table)
+                        if hidden_count:
+                            console.print(f"[dim]{hidden_count} empty session(s) hidden[/dim]")
                     continue
 
                 elif cmd == "session":
@@ -802,11 +876,20 @@ def chat(agent_name: str, new_session: bool, session_id: str | None, verbose: bo
                     )
 
                     lines = [f"# Conversation with {config.name}", ""]
+                    prev_role = None
                     for msg in agent.session.messages:
                         if msg.type == "user":
                             lines.append(f"**You:** {msg.content}\n")
+                            prev_role = "user"
                         elif msg.type == "assistant":
-                            lines.append(f"**{config.name}:** {msg.content}\n")
+                            content = msg.content
+                            if not content or not str(content).strip():
+                                continue
+                            if prev_role == "assistant":
+                                lines.append(f"{content}\n")
+                            else:
+                                lines.append(f"**{config.name}:** {content}\n")
+                            prev_role = "assistant"
 
                     with open(filename, "w") as f:
                         f.write("\n".join(lines))
@@ -847,14 +930,15 @@ def chat(agent_name: str, new_session: bool, session_id: str | None, verbose: bo
                         logging.getLogger("litellm").setLevel(logging.INFO)
                     continue
 
-                elif cmd == "rename":
+                elif cmd in ("rename", "title"):
                     if len(cmd_parts) < 2:
-                        console.print("[yellow]Usage: /rename <new title>[/yellow]")
+                        console.print("[yellow]Usage: /rename <title>[/yellow]")
+                        console.print("[dim]Sets a display title for the current session[/dim]")
                         continue
                     new_title = " ".join(cmd_parts[1:])
                     agent.session.meta.title = new_title
                     session_mgr._update_meta(agent.session)
-                    console.print(f"[green]Session renamed to \"{new_title}\"[/green]")
+                    console.print(f"[green]Session title set to \"{new_title}\"[/green]")
                     continue
 
                 elif cmd == "image":
@@ -1071,6 +1155,8 @@ def chat(agent_name: str, new_session: bool, session_id: str | None, verbose: bo
 @click.option("--export", "-e", "export_id", help="Export a session (by ID, prefix, or alias)")
 @click.option("--format", "-f", "export_fmt", type=click.Choice(["markdown", "json"]),
               default="markdown", help="Export format (default: markdown)")
+@click.option("--all", "-a", "show_all", is_flag=True,
+              help="Include empty sessions (< 2 messages)")
 def sessions(
     agent_name: str,
     search_query: str | None,
@@ -1079,6 +1165,7 @@ def sessions(
     name: tuple[str, str] | None,
     export_id: str | None,
     export_fmt: str,
+    show_all: bool,
 ):
     """
     List, search, name, export, and manage sessions for an agent.
@@ -1202,6 +1289,7 @@ def sessions(
     table.add_column("Updated", style="dim")
     table.add_column("", style="green")
 
+    hidden = 0
     for s in session_list:
         marker = "← current" if s.session_id == current_id else ""
         title = s.title or "(untitled)"
@@ -1210,10 +1298,18 @@ def sessions(
         updated = s.updated_at.strftime("%Y-%m-%d %H:%M")
         # Count messages
         loaded = session_mgr.load_session(agent_name, s.session_id)
-        msg_count = str(len(loaded.messages)) if loaded else "?"
-        table.add_row(s.session_id, alias_name, title, msg_count, created, updated, marker)
+        msg_count = len(loaded.messages) if loaded else 0
+        # Hide empty sessions unless --all or it's the current session
+        if not show_all and msg_count < 2 and s.session_id != current_id:
+            hidden += 1
+            continue
+        table.add_row(s.session_id, alias_name, title, str(msg_count), created, updated, marker)
 
     console.print(table)
+    if hidden:
+        console.print(
+            f"[dim]{hidden} empty session(s) hidden. Use --all to show them.[/dim]"
+        )
     console.print()
     console.print(
         "[dim]Resume a session:[/dim] supyagent chat " + agent_name + " --session <id or name>"
@@ -1467,6 +1563,28 @@ def doctor():
         console.print("[green]  ✓[/green] Config encryption working")
     else:
         console.print("[dim]  -[/dim] Config encryption not yet initialized")
+
+    # 8. Check agent registry
+    registry = AgentRegistry()
+    reg_stats = registry.stats()
+    if reg_stats["total"] > 0:
+        parts = []
+        if reg_stats["active"]:
+            parts.append(f"{reg_stats['active']} active")
+        if reg_stats["completed"]:
+            parts.append(f"{reg_stats['completed']} completed")
+        if reg_stats["failed"]:
+            parts.append(f"{reg_stats['failed']} failed")
+        console.print(
+            f"[green]  ✓[/green] Agent registry: {reg_stats['total']} entries "
+            f"({', '.join(parts)})"
+        )
+        if reg_stats["total"] > 20:
+            console.print(
+                "    [yellow]Tip:[/yellow] Run [cyan]supyagent cleanup[/cyan] to prune stale entries"
+            )
+    else:
+        console.print("[dim]  -[/dim] Agent registry empty")
 
     # Summary
     if all_ok:
@@ -2240,20 +2358,20 @@ def batch(
     # Process
     runner = ExecutionRunner(config)
     results: list[dict[str, Any]] = []
+    total = len(inputs)
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        task = progress.add_task(
-            f"Processing {len(inputs)} items...", total=len(inputs)
-        )
+    for idx, item in enumerate(inputs, 1):
+        # Show task separator on stderr
+        task_preview = str(item.get("task", item) if isinstance(item, dict) else item)
+        if len(task_preview) > 60:
+            task_preview = task_preview[:57] + "..."
+        console_err.print(f"[cyan]── Task {idx}/{total}: {task_preview} ──[/cyan]")
 
-        for item in inputs:
-            result = runner.run(item, secrets=secrets_dict, output_format="json")
-            results.append(result)
-            progress.advance(task)
+        result = runner.run(item, secrets=secrets_dict, output_format="json")
+        results.append(result)
+
+        status = "[green]✓[/green]" if result["ok"] else "[red]✗[/red]"
+        console_err.print(f"  {status} done")
 
     # Count successes/failures
     successes = sum(1 for r in results if r["ok"])
@@ -2265,17 +2383,25 @@ def batch(
     if output_file:
         with open(output_file, "w") as f:
             f.write(output_content + "\n")
-        console.print(
-            f"[green]✓[/green] Processed {len(results)} items "
+        console_err.print(
+            f"\n[green]✓[/green] Processed {len(results)} items "
             f"({successes} succeeded, {failures} failed)"
         )
-        console.print(f"  Results written to [cyan]{output_file}[/cyan]")
+        console_err.print(f"  Results written to [cyan]{output_file}[/cyan]")
     else:
         click.echo(output_content)
 
 
-@cli.command()
-def agents():
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def agents(ctx):
+    """List agent instances or inspect agent configuration."""
+    if ctx.invoked_subcommand is None:
+        # Default: list instances (backward compatible)
+        _agents_list()
+
+
+def _agents_list():
     """List all registered agent instances."""
     registry = AgentRegistry()
     instances = registry.list_all()
@@ -2284,7 +2410,6 @@ def agents():
         console.print("[dim]No active agent instances[/dim]")
         return
 
-    # Build a table
     table = Table(title="Agent Instances")
     table.add_column("ID", style="cyan")
     table.add_column("Agent")
@@ -2311,6 +2436,62 @@ def agents():
         )
 
     console.print(table)
+
+
+@agents.command("list")
+def agents_list_cmd():
+    """List all registered agent instances."""
+    _agents_list()
+
+
+@agents.command("inspect")
+@click.argument("agent_name")
+def agents_inspect(agent_name: str):
+    """
+    Show the full assembled system prompt for an agent.
+
+    Displays the base prompt plus all injected sections (tool creation,
+    resilience, cloud service, thinking guidelines).
+
+    \b
+    Examples:
+        supyagent agents inspect myagent
+    """
+    try:
+        config = load_agent_config(agent_name)
+    except AgentNotFoundError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    from supyagent.models.agent_config import get_full_system_prompt
+
+    # Show with both states for comparison
+    console.print(f"\n[bold]Inspecting agent:[/bold] [cyan]{agent_name}[/cyan]")
+    console.print(f"[dim]Model: {config.model.provider} | Type: {config.type}[/dim]\n")
+
+    # Show which sections are injected
+    sections = []
+    sections.append(("Base system prompt", True))
+    sections.append(("Tool creation instructions", config.will_create_tools))
+    sections.append(("Thinking guidelines", True))
+    sections.append(("Resilience instructions", "when supypowers unavailable"))
+    sections.append(("Cloud service instructions", "when service not connected"))
+
+    console.print("[bold]Injected sections:[/bold]")
+    for name, active in sections:
+        if active is True:
+            console.print(f"  [green]✓[/green] {name}")
+        elif active is False:
+            console.print(f"  [dim]○ {name} (disabled)[/dim]")
+        else:
+            console.print(f"  [yellow]~[/yellow] {name} ({active})")
+
+    # Show the full prompt as it would be assembled
+    full_prompt = get_full_system_prompt(
+        config, supypowers_available=True, has_service=False
+    )
+    console.print(f"\n[bold]Full system prompt[/bold] ({len(full_prompt)} chars):")
+    console.print(Panel(full_prompt, border_style="dim", expand=False))
 
 
 @cli.command()
@@ -2491,15 +2672,55 @@ def plan(task: str, planner: str, new_session: bool):
 
 
 @cli.command()
-def cleanup():
-    """Clean up completed/failed agent instances from the registry."""
+@click.option(
+    "--max-age",
+    type=float,
+    default=24,
+    help="Prune active entries older than N hours (default: 24)",
+)
+@click.option(
+    "--sessions",
+    "-s",
+    "clean_sessions",
+    is_flag=True,
+    help="Also delete empty sessions (< 2 messages)",
+)
+def cleanup(max_age: float, clean_sessions: bool):
+    """Clean up stale registry entries and optionally empty sessions."""
+    total_cleaned = 0
+
+    # 1. Prune completed/failed instances
     registry = AgentRegistry()
     count = registry.cleanup_completed()
+    if count:
+        console.print(f"[green]✓[/green] Removed {count} completed/failed instance(s)")
+        total_cleaned += count
 
-    if count == 0:
-        console.print("[dim]No instances to clean up[/dim]")
-    else:
-        console.print(f"[green]✓[/green] Cleaned up {count} instance(s)")
+    # 2. Prune stale active instances (old PIDs)
+    stale = registry.prune_stale(max_age_hours=max_age)
+    if stale:
+        console.print(f"[green]✓[/green] Pruned {stale} stale instance(s) (older than {max_age}h)")
+        total_cleaned += stale
+
+    # 3. Optionally clean empty sessions
+    if clean_sessions:
+        session_mgr = SessionManager()
+        agents_dir = Path("agents")
+        empty_count = 0
+        if agents_dir.exists():
+            for agent_file in agents_dir.glob("*.yaml"):
+                agent_name = agent_file.stem
+                for meta in session_mgr.list_sessions(agent_name):
+                    loaded = session_mgr.load_session(agent_name, meta.session_id)
+                    if loaded and len(loaded.messages) < 2:
+                        session_mgr.delete_session(agent_name, meta.session_id)
+                        empty_count += 1
+        if empty_count:
+            console.print(f"[green]✓[/green] Deleted {empty_count} empty session(s)")
+            total_cleaned += empty_count
+
+    if total_cleaned == 0:
+        console.print("[dim]Nothing to clean up[/dim]")
 
 
 # =============================================================================
@@ -3422,7 +3643,7 @@ def disconnect():
     if removed:
         console.print("[green]Disconnected from service.[/green]")
     else:
-        console.print("[dim]Not currently connected to a service.[/dim]")
+        console.print("[grey62]Not currently connected to a service.[/grey62]")
 
 
 @cli.command()
@@ -3458,7 +3679,7 @@ def status():
         client.close()
         return
 
-    console.print("[dim]Service is reachable[/dim]")
+    console.print("[grey62]Service is reachable[/grey62]")
     console.print()
 
     # Discover tools
@@ -3466,7 +3687,7 @@ def status():
     client.close()
 
     if not tools:
-        console.print("[dim]No integrations connected. Visit the dashboard to add services.[/dim]")
+        console.print("[grey62]No integrations connected. Visit the dashboard to add services.[/grey62]")
         return
 
     # Group tools by provider/service
@@ -3486,7 +3707,7 @@ def status():
     table = Table(title="Available Service Tools")
     table.add_column("Provider", style="cyan")
     table.add_column("Service")
-    table.add_column("Tools", style="dim", justify="right")
+    table.add_column("Tools", style="grey62", justify="right")
 
     for provider in sorted(providers):
         for service in sorted(providers[provider]):
@@ -3494,7 +3715,7 @@ def status():
             table.add_row(provider, service, str(tool_count))
 
     console.print(table)
-    console.print(f"\n[dim]{len(tools)} tools total[/dim]")
+    console.print(f"\n[bright_black]{len(tools)} tools total[/bright_black]")
 
 
 @cli.command()
