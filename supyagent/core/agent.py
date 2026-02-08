@@ -144,8 +144,12 @@ class Agent(BaseAgentEngine):
         """Load base tools plus the credential request and memory tools."""
         tools = self._load_base_tools()
         tools.append(REQUEST_CREDENTIAL_TOOL)
+        self._tool_sources["request_credential"] = "native"
         if self.config.memory.enabled:
             tools.extend(MEMORY_TOOLS)
+            for t in MEMORY_TOOLS:
+                name = t.get("function", {}).get("name", "")
+                self._tool_sources[name] = "native"
         return tools
 
     def _get_secrets(self) -> dict[str, str]:

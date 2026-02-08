@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Generator
 
@@ -94,6 +95,7 @@ class BaseAgentEngine(ABC):
         # Service integration: HTTP-based tools from supyagent_service
         self._service_client = None
         self._service_tool_metadata: dict[str, dict[str, Any]] = {}
+        self._tool_sources: dict[str, str] = {}  # tool_name -> source label
         if config.service.enabled:
             from supyagent.core.service import get_service_client
 
@@ -121,10 +123,21 @@ class BaseAgentEngine(ABC):
     def _load_base_tools(self) -> list[dict[str, Any]]:
         """Load supypowers + service tools filtered by config permissions, plus delegation and process tools."""
         tools: list[dict[str, Any]] = []
+        self._tool_sources.clear()
 
         # Discover supypowers tools (inside sandbox container if active)
         sp_tools = discover_tools(sandbox=self.sandbox_mgr)
         self.supypowers_available = len(sp_tools) > 0
+
+        # Build script path lookup: tool_name -> script_path
+        sp_script_paths: dict[str, str] = {}
+        for entry in sp_tools:
+            script_path = entry.get("script", "")
+            script_name = os.path.splitext(os.path.basename(script_path))[0]
+            for func in entry.get("functions", []):
+                tool_name = f"{script_name}__{func.get('name', '')}"
+                sp_script_paths[tool_name] = script_path
+
         openai_tools = supypowers_to_openai_tools(sp_tools)
         filtered = filter_tools(openai_tools, self.config.tools)
 
@@ -135,6 +148,9 @@ class BaseAgentEngine(ABC):
                 if not t.get("function", {}).get("name", "").startswith("shell__")
             ]
 
+        for t in filtered:
+            name = t.get("function", {}).get("name", "")
+            self._tool_sources[name] = sp_script_paths.get(name, "supypower")
         tools.extend(filtered)
 
         # Discover service tools (HTTP-based third-party integrations)
@@ -152,16 +168,26 @@ class BaseAgentEngine(ABC):
                 # Strip metadata before sending to LLM (not part of OpenAI format)
                 for tool in filtered_service:
                     tool.pop("metadata", None)
+                    name = tool.get("function", {}).get("name", "")
+                    self._tool_sources[name] = "remote"
                 tools.extend(filtered_service)
 
         # Delegation tools
         if self.delegation_mgr:
-            tools.extend(self.delegation_mgr.get_delegation_tools())
+            delegation_tools = self.delegation_mgr.get_delegation_tools()
+            for t in delegation_tools:
+                name = t.get("function", {}).get("name", "")
+                self._tool_sources[name] = "native"
+            tools.extend(delegation_tools)
 
         # Process management tools
         from supyagent.core.process_tools import get_process_management_tools
 
-        tools.extend(get_process_management_tools())
+        process_tools = get_process_management_tools()
+        for t in process_tools:
+            name = t.get("function", {}).get("name", "")
+            self._tool_sources[name] = "native"
+        tools.extend(process_tools)
 
         return tools
 
@@ -695,3 +721,14 @@ class BaseAgentEngine(ABC):
     def get_available_tools(self) -> list[str]:
         """Get list of available tool names."""
         return [tool.get("function", {}).get("name", "unknown") for tool in self.tools]
+
+    def get_tools_detail(self) -> list[dict[str, str]]:
+        """Get detailed tool info for display: name, description, source."""
+        details = []
+        for tool in self.tools:
+            func = tool.get("function", {})
+            name = func.get("name", "unknown")
+            desc = func.get("description", "")
+            source = self._tool_sources.get(name, "native")
+            details.append({"name": name, "description": desc, "source": source})
+        return details

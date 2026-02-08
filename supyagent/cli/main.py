@@ -614,12 +614,20 @@ def chat(agent_name: str, new_session: bool, session_id: str | None, verbose: bo
                     continue
 
                 elif cmd == "tools":
-                    tools = agent.get_available_tools()
-                    if tools:
-                        console.print("\n[bold]Available tools:[/bold]")
-                        for tool in tools:
-                            console.print(f"  - {tool}")
-                        console.print()
+                    tools_detail = agent.get_tools_detail()
+                    if tools_detail:
+                        table = Table(title="Available Tools")
+                        table.add_column("Name", style="cyan", no_wrap=True)
+                        table.add_column("Description")
+                        table.add_column("Source", style="dim")
+                        for t in tools_detail:
+                            desc = _short_description(t["description"])
+                            source = t["source"]
+                            if source not in ("native", "remote"):
+                                source = os.path.basename(source)
+                            table.add_row(t["name"], desc, source)
+                        console.print(table)
+                        console.print(f"\n[dim]{len(tools_detail)} tools[/dim]")
                     else:
                         console.print("[dim]No tools available[/dim]")
                     continue
@@ -1615,6 +1623,18 @@ _CLOUD_TOOL_PREVIEWS = [
 ]
 
 
+def _short_description(desc: str, max_len: int = 60) -> str:
+    """Extract first sentence of a description, truncating if needed."""
+    # Take first sentence (up to first period followed by space or newline)
+    for i, ch in enumerate(desc):
+        if ch == "\n" or (ch == "." and i + 1 < len(desc) and desc[i + 1] in " \n"):
+            desc = desc[: i + 1].strip()
+            break
+    if len(desc) > max_len:
+        desc = desc[: max_len - 3] + "..."
+    return desc
+
+
 def _show_cloud_tools_status() -> None:
     """Show cloud tools as connected or locked depending on service status."""
     try:
@@ -1656,8 +1676,8 @@ def tools_list(agent_name: str | None):
     """
     List all available tools.
 
-    Shows all discovered supypowers tools. Use --agent to see only
-    the tools available to a specific agent after permission filtering.
+    Shows supypowers tools, remote service tools, and native tools.
+    Use --agent to see only the tools available to a specific agent.
 
     \b
     Examples:
@@ -1666,54 +1686,80 @@ def tools_list(agent_name: str | None):
     """
     from supyagent.core.tools import discover_tools, filter_tools, supypowers_to_openai_tools
 
-    sp_tools = discover_tools()
+    rows: list[tuple[str, str, str]] = []  # (name, description, source)
 
+    # --- Supypowers tools ---
+    sp_tools = discover_tools()
     if not sp_tools:
         console.print("[yellow]No supypowers tools found.[/yellow]")
-        console.print()
-        console.print("Possible causes:")
         console.print(
-            "  - supypowers not installed: [cyan]uv tool install supypowers[/cyan]"
+            "  supypowers not installed? [cyan]uv tool install supypowers[/cyan]\n"
         )
-        console.print("  - supypowers not on PATH: check [cyan]which supypowers[/cyan]")
-        console.print(
-            "  - No powers/ directory: run [cyan]supyagent init[/cyan]"
-        )
-        # Still show cloud tools below
-        openai_tools = []
+
+    # Build script path lookup
+    sp_script_paths: dict[str, str] = {}
+    for entry in sp_tools:
+        script_path = entry.get("script", "")
+        script_name = os.path.splitext(os.path.basename(script_path))[0]
+        for func in entry.get("functions", []):
+            tool_name = f"{script_name}__{func.get('name', '')}"
+            sp_script_paths[tool_name] = os.path.basename(script_path)
+
+    openai_tools = supypowers_to_openai_tools(sp_tools)
+
+    # --- Remote (service) tools ---
+    service_tools: list[dict] = []
+    try:
+        from supyagent.core.service import get_service_client
+
+        client = get_service_client()
+        if client:
+            service_tools = client.discover_tools()
+    except Exception:
+        pass
+
+    # --- Combine and filter ---
+    all_tools = openai_tools + service_tools
+    if agent_name:
+        try:
+            config = load_agent_config(agent_name)
+            all_tools = filter_tools(all_tools, config.tools)
+            console.print(f"[dim]Tools available to '{agent_name}':[/dim]\n")
+        except (AgentNotFoundError, AgentConfigError) as e:
+            console.print(f"[red]Error:[/red] {e}")
+            sys.exit(1)
     else:
-        openai_tools = supypowers_to_openai_tools(sp_tools)
+        console.print("[dim]All discovered tools:[/dim]\n")
 
-        # Filter by agent permissions if specified
-        if agent_name:
-            try:
-                config = load_agent_config(agent_name)
-                openai_tools = filter_tools(openai_tools, config.tools)
-                console.print(f"[dim]Tools available to '{agent_name}':[/dim]\n")
-            except (AgentNotFoundError, AgentConfigError) as e:
-                console.print(f"[red]Error:[/red] {e}")
-                sys.exit(1)
+    service_tool_names = {
+        t.get("function", {}).get("name", "") for t in service_tools
+    }
+
+    for tool in all_tools:
+        func = tool.get("function", {})
+        name = func.get("name", "unknown")
+        desc = _short_description(func.get("description", ""))
+        if name in service_tool_names:
+            source = "remote"
         else:
-            console.print("[dim]All discovered tools:[/dim]\n")
+            source = sp_script_paths.get(name, "supypower")
+        rows.append((name, desc, source))
 
+    if rows:
         table = Table()
-        table.add_column("Tool", style="cyan")
+        table.add_column("Name", style="cyan", no_wrap=True)
         table.add_column("Description")
-
-        for tool in openai_tools:
-            func = tool.get("function", {})
-            name = func.get("name", "unknown")
-            desc = func.get("description", "")
-            # Truncate long descriptions
-            if len(desc) > 70:
-                desc = desc[:67] + "..."
-            table.add_row(name, desc)
-
+        table.add_column("Source", style="dim")
+        for name, desc, source in rows:
+            table.add_row(name, desc, source)
         console.print(table)
-        console.print(f"\n[dim]{len(openai_tools)} local tools[/dim]")
+        console.print(f"\n[dim]{len(rows)} tools[/dim]")
+    else:
+        console.print("[dim]No tools found[/dim]")
 
-    # Show cloud tools status
-    _show_cloud_tools_status()
+    # Hint about cloud tools if not connected
+    if not service_tools:
+        _show_cloud_tools_status()
 
 
 @tools_group.command("new")
