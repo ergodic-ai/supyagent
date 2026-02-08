@@ -330,6 +330,13 @@ class DelegationManager:
             "--output", "json",
         ]
 
+        # Pass sandbox container info to child process via env vars
+        parent_sandbox = getattr(self.parent, "sandbox_mgr", None)
+        env_overrides: dict[str, str] = {}
+        if parent_sandbox and parent_sandbox._started:
+            env_overrides["SUPYAGENT_SANDBOX_CONTAINER"] = parent_sandbox.container_name
+            env_overrides["SUPYAGENT_SANDBOX_RUNTIME"] = parent_sandbox.runtime
+
         supervisor = get_supervisor()
         start = _time.monotonic()
 
@@ -341,6 +348,7 @@ class DelegationManager:
                     tool_name=f"agent__{agent_name}",
                     timeout=timeout,
                     force_background=background,
+                    env=env_overrides if env_overrides else None,
                     metadata={"agent_name": agent_name, "task": full_task[:200]},
                 )
             )
@@ -368,10 +376,13 @@ class DelegationManager:
     ) -> dict[str, Any]:
         """Delegate in-process (original behavior)."""
         try:
+            # Share parent's sandbox manager so child uses same container
+            parent_sandbox = getattr(self.parent, "sandbox_mgr", None)
+
             if config.type == "execution":
                 from supyagent.core.executor import ExecutionRunner
 
-                runner = ExecutionRunner(config)
+                runner = ExecutionRunner(config, sandbox_mgr=parent_sandbox)
                 return runner.run(full_task, output_format="json")
             else:
                 from supyagent.core.agent import Agent
@@ -380,6 +391,7 @@ class DelegationManager:
                     config,
                     registry=self.registry,
                     parent_instance_id=self.parent_id,
+                    sandbox_mgr=parent_sandbox,
                 )
 
                 response = sub_agent.send_message(full_task)

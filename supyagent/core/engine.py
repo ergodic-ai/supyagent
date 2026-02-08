@@ -20,6 +20,7 @@ from supyagent.core.tools import (
     discover_tools,
     execute_tool,
     filter_tools,
+    is_memory_tool,
     supypowers_to_openai_tools,
 )
 from supyagent.models.agent_config import AgentConfig
@@ -31,7 +32,9 @@ from supyagent.utils.media import (
 
 if TYPE_CHECKING:
     from supyagent.core.delegation import DelegationManager
+    from supyagent.core.memory import MemoryManager
     from supyagent.core.registry import AgentRegistry
+    from supyagent.core.sandbox import SandboxManager, WorkspaceValidator
     from supyagent.core.telemetry import TelemetryCollector
 
 
@@ -63,6 +66,7 @@ class BaseAgentEngine(ABC):
             max_retries=config.model.max_retries,
             retry_delay=config.model.retry_delay,
             retry_backoff=config.model.retry_backoff,
+            fallback_models=config.model.fallback,
         )
 
         self.tools: list[dict[str, Any]] = []
@@ -74,6 +78,13 @@ class BaseAgentEngine(ABC):
         self._tool_failure_threshold: int = config.limits.get(
             "circuit_breaker_threshold", 3
         )
+
+        # Memory system
+        self.memory_mgr: MemoryManager | None = None
+
+        # Sandbox / workspace isolation
+        self.sandbox_mgr: SandboxManager | None = None
+        self.workspace_validator: WorkspaceValidator | None = None
 
         # Delegation support
         self.delegation_mgr: DelegationManager | None = None
@@ -111,11 +122,19 @@ class BaseAgentEngine(ABC):
         """Load supypowers + service tools filtered by config permissions, plus delegation and process tools."""
         tools: list[dict[str, Any]] = []
 
-        # Discover supypowers tools
-        sp_tools = discover_tools()
+        # Discover supypowers tools (inside sandbox container if active)
+        sp_tools = discover_tools(sandbox=self.sandbox_mgr)
         self.supypowers_available = len(sp_tools) > 0
         openai_tools = supypowers_to_openai_tools(sp_tools)
         filtered = filter_tools(openai_tools, self.config.tools)
+
+        # Gate shell/exec tools when sandbox disallows them
+        if self.config.sandbox.enabled and not self.config.sandbox.allow_shell:
+            filtered = [
+                t for t in filtered
+                if not t.get("function", {}).get("name", "").startswith("shell__")
+            ]
+
         tools.extend(filtered)
 
         # Discover service tools (HTTP-based third-party integrations)
@@ -159,9 +178,12 @@ class BaseAgentEngine(ABC):
 
     def _system_prompt_kwargs(self) -> dict[str, Any]:
         """Get kwargs for get_full_system_prompt based on engine state."""
+        from supyagent.core.sandbox import create_sandbox_context_prompt
+
         return {
             "supypowers_available": self.supypowers_available,
             "has_service": self._service_client is not None,
+            "sandbox_context": create_sandbox_context_prompt(self.config, self.sandbox_mgr),
         }
 
     def _build_messages_for_llm(self) -> list[dict[str, Any]]:
@@ -202,6 +224,9 @@ class BaseAgentEngine(ABC):
         # 1. Delegation tools
         if self.delegation_mgr and self.delegation_mgr.is_delegation_tool(name):
             result = self.delegation_mgr.execute_delegation(tool_call)
+        elif self.memory_mgr and is_memory_tool(name):
+            # 1b. Memory tools
+            result = self._execute_memory_tool(tool_call)
         elif self._is_process_tool(name):
             # 2. Process management tools
             from supyagent.core.process_tools import execute_process_tool
@@ -273,6 +298,8 @@ class BaseAgentEngine(ABC):
             timeout=timeout if not force_sync else None,
             background=force_background,
             use_supervisor=not force_sync,
+            sandbox=self.sandbox_mgr,
+            workspace_validator=self.workspace_validator,
         )
 
     def _execute_service_tool(self, tool_call: Any) -> dict[str, Any]:
@@ -296,6 +323,130 @@ class BaseAgentEngine(ABC):
             }
 
         return self._service_client.execute_tool(name, args, metadata)
+
+    def _execute_memory_tool(self, tool_call: Any) -> dict[str, Any]:
+        """Execute a memory tool (search, write, recall)."""
+        name = tool_call.function.name
+        try:
+            args = json.loads(tool_call.function.arguments)
+        except json.JSONDecodeError:
+            return {"ok": False, "error": "Invalid JSON arguments", "error_type": "invalid_args"}
+
+        if not self.memory_mgr:
+            return {"ok": False, "error": "Memory system not available"}
+
+        if name == "memory_search":
+            query = args.get("query", "")
+            limit = args.get("limit", 10)
+            results = self.memory_mgr.search(query, limit=limit)
+            formatted = []
+            for r in results:
+                if r["type"] == "entity":
+                    entity = r["entity"]
+                    edges = r.get("edges", [])
+                    entry = {
+                        "name": entity.name,
+                        "type": entity.entity_type,
+                        "summary": entity.summary,
+                        "facts": [e.fact for e in edges],
+                    }
+                    formatted.append(entry)
+                elif r["type"] == "edge":
+                    formatted.append({"fact": r["edge"].fact, "relationship": r["edge"].relationship})
+            return {"ok": True, "data": {"results": formatted, "count": len(formatted)}}
+
+        elif name == "memory_write":
+            from supyagent.core.memory import _now, _short_id
+            from supyagent.models.memory import EntityEdge, EntityNode
+
+            subject_name = args.get("subject", "")
+            fact = args.get("fact", "")
+            if not subject_name or not fact:
+                return {"ok": False, "error": "subject and fact are required"}
+
+            subject_type = args.get("subject_type", "Concept")
+            now = _now()
+
+            # Resolve or create subject entity
+            subject = self.memory_mgr.get_entity_by_name(subject_name)
+            if not subject:
+                subject = EntityNode(
+                    id=_short_id(),
+                    name=subject_name,
+                    entity_type=subject_type,
+                    created_at=now,
+                    updated_at=now,
+                )
+                self.memory_mgr.add_entity(subject)
+
+            # If object entity specified, create edge
+            object_name = args.get("object")
+            if object_name:
+                object_type = args.get("object_type", "Concept")
+                obj = self.memory_mgr.get_entity_by_name(object_name)
+                if not obj:
+                    obj = EntityNode(
+                        id=_short_id(),
+                        name=object_name,
+                        entity_type=object_type,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    self.memory_mgr.add_entity(obj)
+
+                relationship = args.get("relationship", "relates_to")
+                edge = EntityEdge(
+                    id=_short_id(),
+                    source_id=subject.id,
+                    target_id=obj.id,
+                    relationship=relationship,
+                    fact=fact,
+                    valid_from=now,
+                    created_at=now,
+                )
+                self.memory_mgr.add_edge(edge)
+            else:
+                # Store as a self-referencing fact
+                edge = EntityEdge(
+                    id=_short_id(),
+                    source_id=subject.id,
+                    target_id=subject.id,
+                    relationship=args.get("relationship", "relates_to"),
+                    fact=fact,
+                    valid_from=now,
+                    created_at=now,
+                )
+                self.memory_mgr.add_edge(edge)
+
+            return {"ok": True, "data": {"message": f"Stored: {fact}"}}
+
+        elif name == "memory_recall":
+            entity_name = args.get("entity_name", "")
+            if not entity_name:
+                return {"ok": False, "error": "entity_name is required"}
+
+            entity = self.memory_mgr.get_entity_by_name(entity_name)
+            if not entity:
+                return {"ok": True, "data": {"message": f"No memories found for '{entity_name}'"}}
+
+            edges = self.memory_mgr.get_edges_for_entity(entity.id)
+            return {
+                "ok": True,
+                "data": {
+                    "entity": {
+                        "name": entity.name,
+                        "type": entity.entity_type,
+                        "summary": entity.summary,
+                        "properties": entity.properties,
+                    },
+                    "facts": [
+                        {"fact": e.fact, "relationship": e.relationship, "confidence": e.confidence}
+                        for e in edges
+                    ],
+                },
+            }
+
+        return {"ok": False, "error": f"Unknown memory tool: {name}"}
 
     @abstractmethod
     def _get_secrets(self) -> dict[str, str]:

@@ -23,6 +23,10 @@ class ModelConfig(BaseModel):
     max_retries: int = Field(default=3, ge=0, description="Max retries on transient LLM errors")
     retry_delay: float = Field(default=1.0, gt=0, description="Initial retry delay in seconds")
     retry_backoff: float = Field(default=2.0, gt=1, description="Exponential backoff multiplier")
+    fallback: list[str] = Field(
+        default_factory=list,
+        description="Fallback model identifiers tried in order when primary fails on transient errors",
+    )
 
 
 class ToolPermissions(BaseModel):
@@ -181,6 +185,79 @@ class DelegationConfig(BaseModel):
     )
 
 
+class MemorySettings(BaseModel):
+    """Long-term memory system settings."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable entity-graph memory across sessions"
+    )
+    extraction_threshold: int = Field(
+        default=5,
+        description="Extract memories every N signal-flagged exchanges"
+    )
+    retrieval_limit: int = Field(
+        default=10,
+        description="Max memories to inject into context per turn"
+    )
+    auto_extract: bool = Field(
+        default=True,
+        description="Automatically extract memories from conversation"
+    )
+
+
+class MountConfig(BaseModel):
+    """A bind mount from host into the sandbox container."""
+
+    host_path: str = Field(..., description="Absolute path on the host")
+    container_path: str = Field(
+        default="",
+        description="Path inside the container (default: /mnt/{basename})"
+    )
+    readonly: bool = Field(default=True, description="Mount as read-only")
+
+
+class SandboxConfig(BaseModel):
+    """Container sandbox configuration for isolated tool execution."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Run tools inside a container (requires podman or docker)"
+    )
+    image: str = Field(
+        default="python:3.12-slim",
+        description="Container image to use"
+    )
+    runtime: Literal["auto", "podman", "docker"] = Field(
+        default="auto",
+        description="Container runtime: auto-detect, podman, or docker"
+    )
+    extra_mounts: list[MountConfig] = Field(
+        default_factory=list,
+        description="Additional bind mounts into the container"
+    )
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra environment variables inside the container"
+    )
+    network: Literal["none", "host", "bridge"] = Field(
+        default="bridge",
+        description="Container network mode"
+    )
+    memory_limit: str = Field(
+        default="2g",
+        description="Container memory limit (e.g., '2g', '512m')"
+    )
+    allow_shell: bool = Field(
+        default=True,
+        description="Allow shell/exec tool execution inside sandbox"
+    )
+    setup_commands: list[str] = Field(
+        default_factory=list,
+        description="Commands to run inside container after creation (e.g., 'pip install pandas')"
+    )
+
+
 class ServiceConfig(BaseModel):
     """Service integration configuration."""
 
@@ -224,6 +301,18 @@ class AgentConfig(BaseModel):
     delegation: DelegationConfig = Field(
         default_factory=DelegationConfig,
         description="Settings for agent-to-agent delegation"
+    )
+    workspace: str | None = Field(
+        default=None,
+        description="Workspace directory path. Tools execute relative to this directory.",
+    )
+    sandbox: SandboxConfig = Field(
+        default_factory=SandboxConfig,
+        description="Container sandbox settings for isolated tool execution",
+    )
+    memory: MemorySettings = Field(
+        default_factory=MemorySettings,
+        description="Long-term memory system settings"
     )
     service: ServiceConfig = Field(
         default_factory=ServiceConfig,
@@ -373,10 +462,11 @@ def get_full_system_prompt(
     *,
     supypowers_available: bool = True,
     has_service: bool = False,
+    sandbox_context: str = "",
 ) -> str:
     """
     Get the full system prompt, including tool creation instructions if enabled,
-    resilience instructions, and cloud service awareness.
+    resilience instructions, cloud service awareness, and sandbox context.
     """
     prompt = config.system_prompt
     if config.will_create_tools:
@@ -386,6 +476,8 @@ def get_full_system_prompt(
         prompt += AGENT_RESILIENCE_INSTRUCTIONS
     if not has_service:
         prompt += CLOUD_SERVICE_INSTRUCTIONS
+    if sandbox_context:
+        prompt += sandbox_context
     return prompt
 
 

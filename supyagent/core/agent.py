@@ -15,13 +15,19 @@ from supyagent.core.context_manager import ContextManager
 from supyagent.core.credentials import CredentialManager
 from supyagent.core.engine import BaseAgentEngine, MaxIterationsError
 from supyagent.core.session_manager import SessionManager
-from supyagent.core.tools import REQUEST_CREDENTIAL_TOOL, is_credential_request
+from supyagent.core.tools import (
+    MEMORY_TOOLS,
+    REQUEST_CREDENTIAL_TOOL,
+    is_credential_request,
+    is_memory_tool,
+)
 from supyagent.models.agent_config import AgentConfig, get_full_system_prompt
 from supyagent.models.session import Message, Session
 from supyagent.utils.media import Content, content_to_storable, resolve_media_refs
 
 if TYPE_CHECKING:
     from supyagent.core.registry import AgentRegistry
+    from supyagent.core.sandbox import SandboxManager
 
 
 class Agent(BaseAgentEngine):
@@ -45,6 +51,7 @@ class Agent(BaseAgentEngine):
         credential_manager: CredentialManager | None = None,
         registry: "AgentRegistry | None" = None,
         parent_instance_id: str | None = None,
+        sandbox_mgr: "SandboxManager | None" = None,
     ):
         super().__init__(config)
 
@@ -59,17 +66,39 @@ class Agent(BaseAgentEngine):
         if not self.registry:
             self.registry = registry
 
-        # Load available tools (base + credential request tool)
-        self.tools = self._load_tools()
-
-        # Initialize session
+        # Initialize session (before sandbox — sandbox needs session_id for container name)
         if session:
             self.session = session
-            self.messages = self._reconstruct_messages(session)
+            self._session_provided = True
         else:
             self.session = self.session_manager.create_session(
                 config.name, config.model.provider
             )
+            self._session_provided = False
+
+        # Initialize sandbox / workspace validator (before tool loading)
+        if sandbox_mgr:
+            # Shared from parent agent (delegation)
+            self.sandbox_mgr = sandbox_mgr
+        elif config.workspace and config.sandbox.enabled:
+            from supyagent.core.sandbox import SandboxManager
+
+            self.sandbox_mgr = SandboxManager(
+                Path(config.workspace), config.sandbox, self.session.meta.session_id
+            )
+        elif config.workspace:
+            from supyagent.core.sandbox import WorkspaceValidator
+
+            self.workspace_validator = WorkspaceValidator(Path(config.workspace))
+
+        # Load available tools (base + credential request tool)
+        # Must be after sandbox init so discover_tools runs inside container
+        self.tools = self._load_tools()
+
+        # Reconstruct or initialize messages
+        if self._session_provided:
+            self.messages = self._reconstruct_messages(session)
+        else:
             self.messages = [
                 {"role": "system", "content": get_full_system_prompt(config, **self._system_prompt_kwargs())}
             ]
@@ -92,6 +121,17 @@ class Agent(BaseAgentEngine):
             response_reserve=ctx.response_reserve,
         )
 
+        # Initialize memory system
+        if config.memory.enabled:
+            from supyagent.core.memory import MemoryManager
+
+            self.memory_mgr = MemoryManager(
+                agent_name=config.name,
+                llm=self.llm,
+                extraction_threshold=config.memory.extraction_threshold,
+                retrieval_limit=config.memory.retrieval_limit,
+            )
+
         # Initialize telemetry
         from supyagent.core.telemetry import TelemetryCollector
 
@@ -101,9 +141,11 @@ class Agent(BaseAgentEngine):
         )
 
     def _load_tools(self) -> list[dict[str, Any]]:
-        """Load base tools plus the credential request tool."""
+        """Load base tools plus the credential request and memory tools."""
         tools = self._load_base_tools()
         tools.append(REQUEST_CREDENTIAL_TOOL)
+        if self.config.memory.enabled:
+            tools.extend(MEMORY_TOOLS)
         return tools
 
     def _get_secrets(self) -> dict[str, str]:
@@ -111,8 +153,22 @@ class Agent(BaseAgentEngine):
         return self.credential_manager.get_all_for_tools(self.config.name)
 
     def _build_messages_for_llm(self) -> list[dict[str, Any]]:
-        """Apply context trimming via ContextManager."""
+        """Apply context trimming via ContextManager, with memory injection."""
         system_prompt = get_full_system_prompt(self.config, **self._system_prompt_kwargs())
+
+        # Inject memory context based on last user message
+        if self.memory_mgr and self.config.memory.enabled:
+            last_user_msg = next(
+                (m["content"] for m in reversed(self.messages) if m.get("role") == "user"),
+                "",
+            )
+            if isinstance(last_user_msg, str) and last_user_msg:
+                memory_context = self.memory_mgr.get_memory_context(
+                    last_user_msg, limit=self.config.memory.retrieval_limit
+                )
+                if memory_context:
+                    system_prompt = system_prompt + "\n\n" + memory_context
+
         conversation_messages = [m for m in self.messages if m.get("role") != "system"]
         return self.context_manager.build_messages_for_llm(
             system_prompt,
@@ -121,9 +177,11 @@ class Agent(BaseAgentEngine):
         )
 
     def _dispatch_tool_call(self, tool_call: Any) -> dict[str, Any]:
-        """Handle credential requests, then delegate to base dispatch."""
+        """Handle credential requests and memory tools, then delegate to base dispatch."""
         if is_credential_request(tool_call):
             return self._handle_credential_request(tool_call)
+        if self.memory_mgr and is_memory_tool(tool_call.function.name):
+            return self._execute_memory_tool(tool_call)
         return super()._dispatch_tool_call(tool_call)
 
     def _get_media_dir(self) -> Path:
@@ -169,6 +227,14 @@ class Agent(BaseAgentEngine):
         conversation_messages = [m for m in self.messages if m.get("role") != "system"]
 
         if self.context_manager.should_summarize(conversation_messages):
+            # Pre-compaction memory flush: save pending memories before they're lost
+            if self.memory_mgr:
+                try:
+                    self.memory_mgr.flush_pending(
+                        self.session.meta.session_id, force=True
+                    )
+                except Exception:
+                    pass
             try:
                 self.context_manager.generate_summary(conversation_messages)
             except Exception:
@@ -217,6 +283,13 @@ class Agent(BaseAgentEngine):
             )
             self.session_manager.append_message(self.session, tool_msg)
 
+            # Memory: track signal-flagged messages for extraction
+            if self.memory_mgr and self.config.memory.auto_extract:
+                recent = self.messages[-2:]
+                if self.memory_mgr.has_memory_signal(recent):
+                    self.memory_mgr.mark_pending(recent)
+                self.memory_mgr.flush_pending(self.session.meta.session_id)
+
         try:
             result = self._run_loop(
                 max_iterations,
@@ -225,6 +298,13 @@ class Agent(BaseAgentEngine):
             )
         except MaxIterationsError:
             result = self.messages[-1].get("content", "") or ""
+
+        # Memory: check for signals in the final exchange
+        if self.memory_mgr and self.config.memory.auto_extract:
+            recent = self.messages[-2:]
+            if self.memory_mgr.has_memory_signal(recent):
+                self.memory_mgr.mark_pending(recent)
+            self.memory_mgr.flush_pending(self.session.meta.session_id)
 
         self._check_and_summarize()
         return result
@@ -269,7 +349,20 @@ class Agent(BaseAgentEngine):
                     content=storable_content,
                 )
                 self.session_manager.append_message(self.session, tool_msg)
+
+                # Memory: track signal-flagged messages for extraction
+                if self.memory_mgr and self.config.memory.auto_extract:
+                    recent = self.messages[-2:]
+                    if self.memory_mgr.has_memory_signal(recent):
+                        self.memory_mgr.mark_pending(recent)
+                    self.memory_mgr.flush_pending(self.session.meta.session_id)
             elif event_type == "done":
+                # Memory: check for signals in the final exchange
+                if self.memory_mgr and self.config.memory.auto_extract:
+                    recent = self.messages[-2:]
+                    if self.memory_mgr.has_memory_signal(recent):
+                        self.memory_mgr.mark_pending(recent)
+                    self.memory_mgr.flush_pending(self.session.meta.session_id)
                 self._check_and_summarize()
                 yield (event_type, data)
             else:
@@ -321,6 +414,10 @@ class Agent(BaseAgentEngine):
 
     def clear_history(self) -> None:
         """Clear conversation history and start a new session."""
+        # Stop the sandbox container (new session = new container)
+        if self.sandbox_mgr:
+            self.sandbox_mgr.stop()
+
         self.session = self.session_manager.create_session(
             self.config.name, self.config.model.provider
         )

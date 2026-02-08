@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import json
 import subprocess
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from supyagent.models.agent_config import ToolPermissions
 from supyagent.models.tool_result import ToolResult, timed_execution
+
+if TYPE_CHECKING:
+    from supyagent.core.sandbox import SandboxManager, WorkspaceValidator
 
 # Special tool that allows LLM to request credentials from user
 REQUEST_CREDENTIAL_TOOL: dict[str, Any] = {
@@ -47,23 +50,129 @@ REQUEST_CREDENTIAL_TOOL: dict[str, Any] = {
 }
 
 
+MEMORY_SEARCH_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "memory_search",
+        "description": (
+            "Search your long-term memory for facts, entities, and past experiences. "
+            "Use this to recall information from previous conversations."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to search for",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results (default 10)",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+MEMORY_WRITE_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "memory_write",
+        "description": (
+            "Explicitly store a fact or relationship in long-term memory. "
+            "Use this when the user asks you to remember something or when you learn "
+            "an important fact worth preserving."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "subject": {
+                    "type": "string",
+                    "description": "The entity this fact is about",
+                },
+                "subject_type": {
+                    "type": "string",
+                    "description": "Entity type (Person, Project, Technology, etc.)",
+                },
+                "relationship": {
+                    "type": "string",
+                    "description": "Relationship type (prefers, works_on, etc.)",
+                },
+                "object": {
+                    "type": "string",
+                    "description": "The related entity",
+                },
+                "object_type": {
+                    "type": "string",
+                    "description": "Entity type of the object",
+                },
+                "fact": {
+                    "type": "string",
+                    "description": "Natural language description of this fact",
+                },
+            },
+            "required": ["subject", "fact"],
+        },
+    },
+}
+
+MEMORY_RECALL_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "memory_recall",
+        "description": (
+            "Recall everything known about a specific entity (person, project, technology, etc.)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "entity_name": {
+                    "type": "string",
+                    "description": "Name of the entity to recall",
+                },
+            },
+            "required": ["entity_name"],
+        },
+    },
+}
+
+MEMORY_TOOLS = [MEMORY_SEARCH_TOOL, MEMORY_WRITE_TOOL, MEMORY_RECALL_TOOL]
+
+
+def is_memory_tool(name: str) -> bool:
+    """Check if a tool name is a memory tool."""
+    return name in ("memory_search", "memory_write", "memory_recall")
+
+
 def is_credential_request(tool_call: Any) -> bool:
     """Check if a tool call is a credential request."""
     return tool_call.function.name == "request_credential"
 
 
-def discover_tools() -> list[dict[str, Any]]:
+def discover_tools(
+    sandbox: SandboxManager | None = None,
+) -> list[dict[str, Any]]:
     """
     Discover available tools from supypowers.
 
     Runs `supypowers docs --format json` and parses the output.
+    When a sandbox is provided, discovery runs inside the container.
+
+    Args:
+        sandbox: Optional sandbox manager for container-based discovery
 
     Returns:
         List of tool definitions from supypowers
     """
     try:
+        cmd = ["supypowers", "docs", "--format", "json"]
+        if sandbox:
+            sandbox.ensure_started()
+            cmd = sandbox.wrap_command(cmd)
+
         result = subprocess.run(
-            ["supypowers", "docs", "--format", "json"],
+            cmd,
             capture_output=True,
             text=True,
             timeout=30,
@@ -91,6 +200,8 @@ def execute_tool(
     timeout: float | None = None,
     background: bool = False,
     use_supervisor: bool = False,
+    sandbox: SandboxManager | None = None,
+    workspace_validator: WorkspaceValidator | None = None,
 ) -> dict[str, Any]:
     """
     Execute a supypowers function.
@@ -103,17 +214,29 @@ def execute_tool(
         timeout: Override default timeout (seconds)
         background: Force background execution (returns immediately)
         use_supervisor: Use ProcessSupervisor for execution (enables timeout/background)
+        sandbox: Optional sandbox manager for container-based execution
+        workspace_validator: Optional validator for soft workspace boundary checks
 
     Returns:
         Result dict with 'ok' and 'data' or 'error'
     """
     tool_name = f"{script}__{func}"
 
+    # Soft workspace validation (when sandbox is off but workspace is set)
+    if workspace_validator:
+        error = workspace_validator.check_tool_args(tool_name, args)
+        if error:
+            return ToolResult.fail(
+                error,
+                error_type="workspace_violation",
+                tool_name=tool_name,
+            ).to_dict()
+
     # If supervisor features requested, use async path
     if use_supervisor or background or timeout is not None:
         with timed_execution() as timing:
             result = _execute_tool_sync_via_supervisor(
-                script, func, args, secrets, timeout, background
+                script, func, args, secrets, timeout, background, sandbox=sandbox
             )
         result.setdefault("tool_name", tool_name)
         result.setdefault("duration_ms", timing.get("duration_ms"))
@@ -126,6 +249,10 @@ def execute_tool(
     if secrets:
         for key, value in secrets.items():
             cmd.extend(["--secrets", f"{key}={value}"])
+
+    # Wrap command for sandbox execution
+    if sandbox:
+        cmd = sandbox.wrap_command(cmd)
 
     with timed_execution() as timing:
         try:
@@ -179,6 +306,7 @@ async def execute_tool_async(
     secrets: dict[str, str] | None = None,
     timeout: float | None = None,
     background: bool = False,
+    sandbox: SandboxManager | None = None,
 ) -> dict[str, Any]:
     """
     Execute a supypowers function asynchronously using the ProcessSupervisor.
@@ -195,6 +323,7 @@ async def execute_tool_async(
         secrets: Optional secrets to pass as environment variables
         timeout: Override default timeout (seconds)
         background: Force background execution (returns immediately)
+        sandbox: Optional sandbox manager for container-based execution
 
     Returns:
         Result dict with 'ok' and 'data' or 'error'
@@ -208,6 +337,10 @@ async def execute_tool_async(
     if secrets:
         for key, value in secrets.items():
             cmd.extend(["--secrets", f"{key}={value}"])
+
+    # Wrap command for sandbox execution
+    if sandbox:
+        cmd = sandbox.wrap_command(cmd)
 
     supervisor = get_supervisor()
 
@@ -228,6 +361,7 @@ def _execute_tool_sync_via_supervisor(
     secrets: dict[str, str] | None = None,
     timeout: float | None = None,
     background: bool = False,
+    sandbox: SandboxManager | None = None,
 ) -> dict[str, Any]:
     """
     Synchronous wrapper for supervisor-based tool execution.
@@ -239,7 +373,7 @@ def _execute_tool_sync_via_supervisor(
 
     try:
         return run_supervisor_coroutine(
-            execute_tool_async(script, func, args, secrets, timeout, background)
+            execute_tool_async(script, func, args, secrets, timeout, background, sandbox=sandbox)
         )
     except Exception as e:
         return {"ok": False, "error": f"Supervisor execution failed: {e}"}

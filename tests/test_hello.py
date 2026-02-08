@@ -34,13 +34,12 @@ def _apply_patches(stack, mgr, extra_patches=None):
 class TestHelloCommand:
     """Tests for the 'hello' CLI command."""
 
-    def test_hello_fresh_setup_skip_all(self, tmp_path):
-        """Fresh setup, skip service + skip model + skip agent."""
+    def test_hello_fresh_setup(self, tmp_path):
+        """Fresh setup, skip service, pick model, create agent, decline chat."""
         runner = CliRunner()
         mgr = _make_mgr(tmp_path)
 
-        # Input flow: n=skip service (integrations auto-skipped),
-        # 2=anthropic, 1=sonnet, n=skip agent
+        # Flow: n=skip service, 2=anthropic, 1=sonnet, \n=accept default name, n=no chat
         with runner.isolated_filesystem():
             with ExitStack() as stack:
                 _apply_patches(stack, mgr, [
@@ -49,7 +48,7 @@ class TestHelloCommand:
                 result = runner.invoke(
                     cli,
                     ["hello"],
-                    input="n\n2\n1\nn\n",
+                    input="n\n2\n1\n\nn\n",
                 )
 
         assert result.exit_code == 0
@@ -68,15 +67,15 @@ class TestHelloCommand:
                 result = runner.invoke(
                     cli,
                     ["hello"],
-                    input="n\n2\n1\nn\n",
+                    input="n\n2\n1\n\nn\n",
                 )
 
             assert result.exit_code == 0
             assert Path("agents").exists()
             assert Path("powers").exists()
 
-    def test_hello_existing_state_continue(self, tmp_path):
-        """Already set up, user chooses 'continue' -> exits early."""
+    def test_hello_existing_state_exit(self, tmp_path):
+        """Already set up, user chooses '0' (exit) -> exits early."""
         runner = CliRunner()
         mgr = _make_mgr(tmp_path)
 
@@ -90,15 +89,14 @@ class TestHelloCommand:
                 result = runner.invoke(
                     cli,
                     ["hello"],
-                    input="continue\n",
+                    input="0\n",
                 )
 
         assert result.exit_code == 0
-        assert "Already set up" in result.output
-        assert "Nothing to do" in result.output
+        assert "What would you like to do?" in result.output
 
     def test_hello_existing_state_redo(self, tmp_path):
-        """Already set up, user chooses 'redo' -> runs all steps."""
+        """Already set up, user chooses '4' (start over) -> runs all steps."""
         runner = CliRunner()
         mgr = _make_mgr(tmp_path)
 
@@ -114,7 +112,7 @@ class TestHelloCommand:
                 result = runner.invoke(
                     cli,
                     ["hello"],
-                    input="redo\nn\n2\n1\nn\n",
+                    input="4\nn\n2\n1\n\nn\n",
                 )
 
         assert result.exit_code == 0
@@ -152,12 +150,12 @@ class TestHelloCommand:
                 result = runner.invoke(
                     cli,
                     ["hello"],
-                    input="y\ndone\n2\n1\nn\n",
+                    input="y\ndone\n2\n1\n\nn\n",
                 )
 
         assert result.exit_code == 0
         assert "ABCD-1234" in result.output
-        assert "Connected to service" in result.output
+        assert "Connected to Supyagent Service" in result.output
         mock_store.assert_called_once()
 
     def test_hello_service_connection_skip(self, tmp_path):
@@ -173,11 +171,11 @@ class TestHelloCommand:
                 result = runner.invoke(
                     cli,
                     ["hello"],
-                    input="n\n2\n1\nn\n",
+                    input="n\n2\n1\n\nn\n",
                 )
 
         assert result.exit_code == 0
-        assert "connect anytime" in result.output
+        assert "supyagent connect" in result.output
 
     def test_hello_service_unreachable(self, tmp_path):
         """Test graceful handling when service is unreachable."""
@@ -196,7 +194,7 @@ class TestHelloCommand:
                 result = runner.invoke(
                     cli,
                     ["hello"],
-                    input="y\n2\n1\nn\n",
+                    input="y\n2\n1\n\nn\n",
                 )
 
         assert result.exit_code == 0
@@ -215,12 +213,13 @@ class TestHelloCommand:
                 result = runner.invoke(
                     cli,
                     ["hello"],
-                    input="n\n1\n1\nn\n",
+                    input="n\n1\n1\n\nn\n",
                 )
 
         assert result.exit_code == 0
         assert "gpt-4o" in result.output
         assert mgr.get("OPENAI_API_KEY") == "sk-test-key"
+        assert mgr.get("DEFAULT_MODEL") == "gpt-4o"
 
     def test_hello_model_selection_anthropic(self, tmp_path):
         """Test selecting Anthropic provider."""
@@ -235,12 +234,13 @@ class TestHelloCommand:
                 result = runner.invoke(
                     cli,
                     ["hello"],
-                    input="n\n2\n1\nn\n",
+                    input="n\n2\n1\n\nn\n",
                 )
 
         assert result.exit_code == 0
         assert "claude-sonnet-4-5" in result.output
         assert mgr.get("ANTHROPIC_API_KEY") == "sk-ant-test"
+        assert mgr.get("DEFAULT_MODEL") is not None
 
     def test_hello_model_custom(self, tmp_path):
         """Test custom model string entry."""
@@ -255,11 +255,12 @@ class TestHelloCommand:
                 result = runner.invoke(
                     cli,
                     ["hello"],
-                    input="n\n0\nollama/llama3\nMY_KEY\nn\n",
+                    input="n\n0\nollama/llama3\nMY_KEY\n\nn\n",
                 )
 
         assert result.exit_code == 0
         assert mgr.get("MY_KEY") == "my-key-123"
+        assert mgr.get("DEFAULT_MODEL") == "ollama/llama3"
 
     def test_hello_agent_creation(self, tmp_path):
         """Test agent creation step produces correct YAML."""
@@ -274,7 +275,7 @@ class TestHelloCommand:
                 result = runner.invoke(
                     cli,
                     ["hello"],
-                    input="n\n2\n1\ny\nresearch assistant\nresearcher\n",
+                    input="n\n2\n1\nresearcher\nn\n",
                 )
 
             assert result.exit_code == 0
@@ -283,12 +284,10 @@ class TestHelloCommand:
 
             content = agent_path.read_text()
             assert "name: researcher" in content
-            assert "research assistant" in content
-            assert "service:" in content
-            assert "enabled: false" in content
+            assert "claude-sonnet-4-5" in content
 
-    def test_hello_agent_with_service(self, tmp_path):
-        """Agent YAML has service.enabled: true when service is connected."""
+    def test_hello_agent_with_service_connected(self, tmp_path):
+        """Agent YAML created when service is already connected."""
         runner = CliRunner()
         mgr = _make_mgr(tmp_path)
 
@@ -305,17 +304,126 @@ class TestHelloCommand:
                     patch("supyagent.cli.hello.ServiceClient", return_value=mock_client),
                     patch("supyagent.cli.hello.getpass.getpass", return_value="sk-test"),
                 ])
+                # Already connected → n=don't reconnect, 2=anthro, 1=sonnet, helper=name, n=no chat
                 result = runner.invoke(
                     cli,
                     ["hello"],
-                    input="n\ndone\n2\n1\ny\nhelper\nhelper\n",
+                    input="n\n2\n1\nhelper\nn\n",
                 )
 
             assert result.exit_code == 0
             agent_path = Path("agents/helper.yaml")
             assert agent_path.exists()
             content = agent_path.read_text()
-            assert "enabled: true" in content
+            assert "name: helper" in content
+
+    def test_hello_quick_flag(self, tmp_path):
+        """Test --quick flag runs non-interactive setup."""
+        runner = CliRunner()
+        mgr = _make_mgr(tmp_path)
+
+        with runner.isolated_filesystem():
+            with ExitStack() as stack:
+                _apply_patches(stack, mgr)
+                result = runner.invoke(cli, ["hello", "--quick"])
+
+        assert result.exit_code == 0
+        assert "Project initialized" in result.output
+        assert "Welcome to Supyagent" not in result.output
+
+    def test_hello_model_other_option(self, tmp_path):
+        """Test selecting 'Other' within a provider."""
+        runner = CliRunner()
+        mgr = _make_mgr(tmp_path)
+
+        with runner.isolated_filesystem():
+            with ExitStack() as stack:
+                _apply_patches(stack, mgr, [
+                    patch("supyagent.cli.hello.getpass.getpass", return_value="sk-key"),
+                ])
+                # n=skip service, 2=anthropic, 0=other model, custom-id=model, name, n=no chat
+                result = runner.invoke(
+                    cli,
+                    ["hello"],
+                    input="n\n2\n0\nanthropic/claude-opus-4\n\nn\n",
+                )
+
+        assert result.exit_code == 0
+        assert mgr.get("DEFAULT_MODEL") == "anthropic/claude-opus-4"
+
+    def test_hello_capability_summary(self, tmp_path):
+        """Test that step 1 shows capability summary instead of tool table."""
+        runner = CliRunner()
+        mgr = _make_mgr(tmp_path)
+
+        with runner.isolated_filesystem():
+            with ExitStack() as stack:
+                _apply_patches(stack, mgr, [
+                    patch("supyagent.cli.hello.getpass.getpass", return_value=""),
+                ])
+                result = runner.invoke(
+                    cli,
+                    ["hello"],
+                    input="n\n2\n1\n\nn\n",
+                )
+
+        assert result.exit_code == 0
+        assert "Your agent can:" in result.output
+
+    def test_hello_sets_default_model(self, tmp_path):
+        """Test that wizard saves DEFAULT_MODEL globally."""
+        runner = CliRunner()
+        mgr = _make_mgr(tmp_path)
+
+        with runner.isolated_filesystem():
+            with ExitStack() as stack:
+                _apply_patches(stack, mgr, [
+                    patch("supyagent.cli.hello.getpass.getpass", return_value="sk-test"),
+                ])
+                result = runner.invoke(
+                    cli,
+                    ["hello"],
+                    input="n\n1\n1\n\nn\n",
+                )
+
+        assert result.exit_code == 0
+        assert mgr.get("DEFAULT_MODEL") == "gpt-4o"
+
+    def test_hello_env_var_detection(self, tmp_path):
+        """Test that env var detection and import works in the model step."""
+        from supyagent.cli.hello import _step_model_selection
+
+        mgr = _make_mgr(tmp_path)
+
+        env_keys = {"OPENAI_API_KEY": "OpenAI"}
+
+        with ExitStack() as stack:
+            _apply_patches(stack, mgr)
+            stack.enter_context(
+                patch.dict(
+                    "supyagent.cli.hello.os.environ",
+                    {"OPENAI_API_KEY": "sk-env-test"},
+                    clear=True,
+                )
+            )
+            # Mock the interactive prompts: y=import, 1=openai, 1=gpt-4o
+            answers = iter(["y", "1", "1"])
+            stack.enter_context(
+                patch("supyagent.cli.hello.Confirm.ask", return_value=True)
+            )
+            stack.enter_context(
+                patch("supyagent.cli.hello.Prompt.ask", side_effect=answers)
+            )
+            stack.enter_context(
+                patch("supyagent.cli.hello.getpass.getpass", return_value=""),
+            )
+
+            statuses: dict[int, str] = {}
+            result = _step_model_selection(statuses, env_keys)
+
+        assert result == "gpt-4o"
+        assert mgr.get("OPENAI_API_KEY") == "sk-env-test"
+        assert mgr.get("DEFAULT_MODEL") == "gpt-4o"
 
 
 @patch("supyagent.core.config._config_manager", None)
@@ -334,7 +442,7 @@ class TestSetupAlias:
                 result = runner.invoke(
                     cli,
                     ["setup"],
-                    input="n\n2\n1\nn\n",
+                    input="n\n2\n1\n\nn\n",
                 )
 
         assert result.exit_code == 0
@@ -358,7 +466,7 @@ class TestInitCommand:
                 result = runner.invoke(
                     cli,
                     ["init"],
-                    input="n\n2\n1\nn\n",
+                    input="n\n2\n1\n\nn\n",
                 )
 
         assert result.exit_code == 0
@@ -402,35 +510,23 @@ class TestInitCommand:
 
 
 @patch("supyagent.core.config._config_manager", None)
-class TestIntegrationPolling:
-    """Test integration connect polling behavior."""
+class TestIntegrationInline:
+    """Test integration connect behavior (now inline with service step)."""
 
-    def test_integration_already_connected(self, tmp_path):
-        """Already connected provider shows status."""
-        from supyagent.cli.hello import _step_integrations
-        from supyagent.core.config import ConfigManager
-        from supyagent.core.service import SERVICE_API_KEY
-
-        mgr = ConfigManager(base_dir=tmp_path / "config")
-        mgr.set(SERVICE_API_KEY, "sk_live_test")
+    def test_offer_integrations_shows_providers(self, tmp_path):
+        """Integration list is shown after service connection."""
+        from supyagent.cli.hello import _offer_integrations
 
         mock_client = MagicMock()
         mock_client.list_integrations.return_value = [
             {"provider": "google", "status": "active", "services": ["gmail.read"]},
         ]
 
+        mgr = _make_mgr(tmp_path)
         with ExitStack() as stack:
             _apply_patches(stack, mgr, [
                 patch("supyagent.cli.hello.ServiceClient", return_value=mock_client),
                 patch("supyagent.cli.hello.Prompt.ask", return_value="done"),
             ])
-            result = _step_integrations(service_connected=True, statuses={})
-
-        assert "google" in result
-
-    def test_integration_skipped_when_not_connected(self):
-        """Integrations skipped when not connected to service."""
-        from supyagent.cli.hello import _step_integrations
-
-        result = _step_integrations(service_connected=False, statuses={})
-        assert result == []
+            # Should not raise; just returns
+            _offer_integrations("sk_live_test", "https://app.supyagent.com")

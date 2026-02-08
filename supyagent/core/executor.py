@@ -4,14 +4,21 @@ Execution runner for non-interactive agent execution.
 Extends BaseAgentEngine for stateless, input->output pipelines designed for automation.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
-from typing import Any, Callable
+import uuid
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
 
 from supyagent.core.credentials import CredentialManager
 from supyagent.core.engine import BaseAgentEngine, MaxIterationsError
 from supyagent.models.agent_config import AgentConfig, get_full_system_prompt
+
+if TYPE_CHECKING:
+    from supyagent.core.sandbox import SandboxManager
 
 # Type for progress callback: (event_type, data)
 # event_type: "tool_start", "tool_end", "thinking", "streaming", "reasoning"
@@ -39,6 +46,7 @@ class ExecutionRunner(BaseAgentEngine):
         self,
         config: AgentConfig,
         credential_manager: CredentialManager | None = None,
+        sandbox_mgr: SandboxManager | None = None,
     ):
         super().__init__(config)
         self.credential_manager = credential_manager or CredentialManager()
@@ -50,7 +58,23 @@ class ExecutionRunner(BaseAgentEngine):
 
             self._setup_delegation(registry=AgentRegistry())
 
+        # Initialize sandbox / workspace validator
+        if sandbox_mgr:
+            self.sandbox_mgr = sandbox_mgr
+        elif config.workspace and config.sandbox.enabled:
+            from supyagent.core.sandbox import SandboxManager as _SandboxManager
+
+            session_id = str(uuid.uuid4())
+            self.sandbox_mgr = _SandboxManager(
+                Path(config.workspace), config.sandbox, session_id
+            )
+        elif config.workspace:
+            from supyagent.core.sandbox import WorkspaceValidator
+
+            self.workspace_validator = WorkspaceValidator(Path(config.workspace))
+
         # Load available tools (no credential request tool in execution mode)
+        # Must be after sandbox init so discover_tools runs inside container
         self.tools = self._load_tools()
 
     def _load_tools(self) -> list[dict[str, Any]]:

@@ -111,6 +111,7 @@ class LLMClient:
         max_retries: int = 3,
         retry_delay: float = 1.0,
         retry_backoff: float = 2.0,
+        fallback_models: list[str] | None = None,
     ):
         """
         Initialize the LLM client.
@@ -122,6 +123,7 @@ class LLMClient:
             max_retries: Maximum number of retries on transient errors
             retry_delay: Initial delay between retries (seconds)
             retry_backoff: Exponential backoff multiplier
+            fallback_models: Fallback model identifiers tried when primary exhausts retries
         """
         self.model = model
         self.temperature = temperature
@@ -129,6 +131,7 @@ class LLMClient:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.retry_backoff = retry_backoff
+        self.fallback_models = fallback_models or []
 
     def chat(
         self,
@@ -137,7 +140,10 @@ class LLMClient:
         stream: bool = False,
     ) -> ModelResponse:
         """
-        Send a chat completion request with automatic retry on transient errors.
+        Send a chat completion request with automatic retry and model failover.
+
+        Tries the primary model with retries, then each fallback model in order.
+        Non-transient errors (auth, model not found) raise immediately without failover.
 
         Args:
             messages: List of message dicts with 'role' and 'content'
@@ -147,8 +153,37 @@ class LLMClient:
         Returns:
             LiteLLM ModelResponse
         """
+        models = [self.model] + self.fallback_models
+
+        last_error: Exception | None = None
+        for i, model in enumerate(models):
+            if i > 0:
+                logger.warning("Falling back to model: %s", model)
+
+            result, error = self._try_model(model, messages, tools, stream)
+            if result is not None:
+                return result
+            last_error = error
+
+        # All models exhausted
+        raise _friendly_llm_error(self.model, last_error)
+
+    def _try_model(
+        self,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        stream: bool,
+    ) -> tuple[ModelResponse | None, Exception | None]:
+        """
+        Try a single model with retries.
+
+        Returns:
+            (response, None) on success, or (None, last_error) on transient failure.
+            Raises LLMError immediately on non-transient errors (auth, model not found).
+        """
         kwargs: dict[str, Any] = {
-            "model": self.model,
+            "model": model,
             "messages": messages,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
@@ -164,26 +199,25 @@ class LLMClient:
 
         for attempt in range(self.max_retries + 1):
             try:
-                return completion(**kwargs)
+                return completion(**kwargs), None
             except (RateLimitError, ServiceUnavailableError, APIConnectionError) as e:
                 last_error = e
                 if attempt < self.max_retries:
                     logger.warning(
-                        "LLM call failed (attempt %d/%d): %s. Retrying in %.1fs...",
+                        "LLM call failed (attempt %d/%d, model %s): %s. Retrying in %.1fs...",
                         attempt + 1,
                         self.max_retries + 1,
+                        model,
                         e,
                         delay,
                     )
                     time.sleep(delay)
                     delay *= self.retry_backoff
-                else:
-                    raise _friendly_llm_error(self.model, e) from e
             except (AuthenticationError, NotFoundError) as e:
-                # Non-transient errors: don't retry, raise friendly error immediately
-                raise _friendly_llm_error(self.model, e) from e
+                # Non-transient: raise immediately, no failover
+                raise _friendly_llm_error(model, e) from e
 
-        raise last_error  # Should not reach here
+        return None, last_error
 
     def change_model(self, model: str) -> None:
         """Change the model being used."""

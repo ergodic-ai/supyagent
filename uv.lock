@@ -2013,7 +2013,7 @@ wheels = [
 
 [[package]]
 name = "supyagent"
-version = "0.3.1"
+version = "0.3.6"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -2023,6 +2023,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "rich" },
+    { name = "supypowers" },
     { name = "tiktoken" },
 ]
 
@@ -2081,9 +2082,19 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "supypowers", specifier = ">=0.3.2" },
     { name = "tiktoken", specifier = ">=0.5.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'dev'", specifier = ">=0.27.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'serve'", specifier = ">=0.27.0" },
+]
+
+[[package]]
+name = "supypowers"
+version = "0.3.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/16/1448dbee3c734c8f1762924023a0accc9f737af8378d50dd05ecff5bd7e6/supypowers-0.3.6.tar.gz", hash = "sha256:4107bfbdd1fbf0f1640c17c07e0a7f79235f8917f3cecfdeb8b4f9c914436692", size = 37254 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e3/c8/18b7ad2b457feaf193bfd2a7a453c06d3edad084f3edbf2f58b6a3d446c9/supypowers-0.3.6-py3-none-any.whl", hash = "sha256:872f950484d328723e611d01e67bd95f8c7e075cc6d83212a709058cbee595a3", size = 18596 },
 ]
 
 [[package]]
