@@ -188,6 +188,74 @@ class ServiceClient:
         except httpx.RequestError as e:
             return {"ok": False, "error": f"Could not reach service: {e}"}
 
+    # ------------------------------------------------------------------
+    # Inbox
+    # ------------------------------------------------------------------
+
+    def inbox_list(
+        self,
+        status: str | None = None,
+        provider: str | None = None,
+        event_type: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """List inbox events."""
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if status:
+            params["status"] = status
+        if provider:
+            params["provider"] = provider
+        if event_type:
+            params["event_type"] = event_type
+
+        try:
+            response = self._client.get("/api/v1/inbox", params=params)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            return {"events": [], "total": 0, "error": str(e)}
+        except httpx.RequestError as e:
+            return {"events": [], "total": 0, "error": str(e)}
+
+    def inbox_get(self, event_id: str) -> dict[str, Any] | None:
+        """Get a single inbox event (auto-marks as read)."""
+        try:
+            response = self._client.get(f"/api/v1/inbox/{event_id}")
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError:
+            return None
+        except httpx.RequestError:
+            return None
+
+    def inbox_archive(self, event_id: str) -> bool:
+        """Archive a single inbox event."""
+        try:
+            response = self._client.post(f"/api/v1/inbox/{event_id}/archive")
+            response.raise_for_status()
+            return True
+        except (httpx.HTTPStatusError, httpx.RequestError):
+            return False
+
+    def inbox_archive_all(
+        self, provider: str | None = None, before: str | None = None
+    ) -> int:
+        """Archive all inbox events. Returns count of archived events."""
+        body: dict[str, str] = {}
+        if provider:
+            body["provider"] = provider
+        if before:
+            body["before"] = before
+
+        try:
+            response = self._client.post("/api/v1/inbox/archive-all", json=body)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("archived", 0)
+        except (httpx.HTTPStatusError, httpx.RequestError):
+            return 0
+
     def health_check(self) -> bool:
         """Check if the service is reachable."""
         try:

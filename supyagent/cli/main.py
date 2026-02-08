@@ -112,11 +112,12 @@ def cli(ctx: click.Context, debug: bool):
 
 
 @cli.command()
-def hello():
+@click.option("--quick", "-q", is_flag=True, help="Non-interactive setup with sensible defaults")
+def hello(quick: bool):
     """Interactive setup wizard -- the best way to get started."""
     from supyagent.cli.hello import run_hello_wizard
 
-    run_hello_wizard()
+    run_hello_wizard(quick=quick)
 
 
 # Register 'setup' as an alias for 'hello'
@@ -3317,6 +3318,217 @@ def service_tools(provider: str | None, as_json: bool):
     console.print(
         "[dim]Run a tool:[/dim] supyagent service run <tool_name> '<json_args>'"
     )
+
+
+@service_group.command("inbox")
+@click.option(
+    "--status",
+    "-s",
+    default=None,
+    type=click.Choice(["unread", "read", "archived"], case_sensitive=False),
+    help="Filter by status (default: all)",
+)
+@click.option(
+    "--provider",
+    "-p",
+    default=None,
+    help="Filter by provider (e.g., github, slack)",
+)
+@click.option("--limit", "-l", default=20, type=int, help="Max events to show")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def service_inbox(
+    status: str | None, provider: str | None, limit: int, as_json: bool
+):
+    """
+    View your AI inbox — incoming events from connected integrations.
+
+    Shows recent webhook events (GitHub PRs, Slack messages, SMS, etc.)
+    that your agents can act on.
+
+    \b
+    Examples:
+        supyagent service inbox                        # List recent events
+        supyagent service inbox --status unread         # Unread only
+        supyagent service inbox --provider github       # GitHub events only
+        supyagent service inbox --json                  # Machine-readable output
+    """
+    from supyagent.core.service import get_service_client
+
+    client = get_service_client()
+    if not client:
+        console.print("[yellow]Not connected to service.[/yellow]")
+        console.print("Run [cyan]supyagent connect[/cyan] to authenticate.")
+        sys.exit(1)
+
+    data = client.inbox_list(status=status, provider=provider, limit=limit)
+    client.close()
+
+    events = data.get("events", [])
+    total = data.get("total", 0)
+
+    if data.get("error"):
+        console.print(f"[red]Error:[/red] {data['error']}")
+        sys.exit(1)
+
+    if as_json:
+        click.echo(json.dumps(data, indent=2))
+        return
+
+    if not events:
+        console.print("[grey62]No events in your inbox.[/grey62]")
+        if not status:
+            console.print(
+                "[grey62]Configure webhooks on the dashboard to start receiving events.[/grey62]"
+            )
+        return
+
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+    table.add_column("Status", width=8)
+    table.add_column("Provider", style="cyan", width=10)
+    table.add_column("Type", width=20)
+    table.add_column("Summary")
+    table.add_column("Time", style="bright_black", justify="right", width=10)
+
+    for event in events:
+        st = event.get("status", "?")
+        st_style = (
+            "[blue]unread[/blue]"
+            if st == "unread"
+            else "[bright_black]read[/bright_black]"
+            if st == "read"
+            else "[bright_black]archived[/bright_black]"
+        )
+        prov = event.get("provider", "?")
+        etype = event.get("event_type", "?")
+        summary = event.get("summary", "")
+        if len(summary) > 60:
+            summary = summary[:57] + "..."
+        received = event.get("received_at", "")
+        time_str = _format_relative_time(received) if received else ""
+
+        table.add_row(st_style, prov, etype, summary, time_str)
+
+    console.print(table)
+    console.print(f"\n[grey62]{total} total event{'s' if total != 1 else ''}[/grey62]")
+
+
+@service_group.command("inbox:get")
+@click.argument("event_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def service_inbox_get(event_id: str, as_json: bool):
+    """
+    View a single inbox event with its full payload.
+
+    The event is automatically marked as read when viewed.
+
+    \b
+    Examples:
+        supyagent service inbox:get <event-id>
+        supyagent service inbox:get <event-id> --json
+    """
+    from supyagent.core.service import get_service_client
+
+    client = get_service_client()
+    if not client:
+        console.print("[yellow]Not connected to service.[/yellow]")
+        console.print("Run [cyan]supyagent connect[/cyan] to authenticate.")
+        sys.exit(1)
+
+    event = client.inbox_get(event_id)
+    client.close()
+
+    if not event:
+        console.print(f"[red]Error:[/red] Event not found: {event_id}")
+        sys.exit(1)
+
+    if as_json:
+        click.echo(json.dumps(event, indent=2))
+        return
+
+    console.print(f"[bold]{event.get('summary', 'No summary')}[/bold]")
+    console.print()
+    console.print(f"  Provider:  [cyan]{event.get('provider', '?')}[/cyan]")
+    console.print(f"  Type:      {event.get('event_type', '?')}")
+    console.print(f"  Status:    {event.get('status', '?')}")
+    console.print(f"  Received:  {event.get('received_at', '?')}")
+    if event.get("provider_event_id"):
+        console.print(f"  Event ID:  [bright_black]{event['provider_event_id']}[/bright_black]")
+    console.print()
+    console.print("[bold]Payload:[/bold]")
+    payload_str = json.dumps(event.get("payload", {}), indent=2)
+    console.print(f"[grey62]{payload_str}[/grey62]")
+
+
+@service_group.command("inbox:archive")
+@click.argument("event_id", required=False, default=None)
+@click.option("--all", "archive_all", is_flag=True, help="Archive all events")
+@click.option("--provider", "-p", default=None, help="When using --all, archive only this provider")
+def service_inbox_archive(
+    event_id: str | None, archive_all: bool, provider: str | None
+):
+    """
+    Archive inbox events.
+
+    Archive a single event by ID, or use --all to archive everything.
+
+    \b
+    Examples:
+        supyagent service inbox:archive <event-id>
+        supyagent service inbox:archive --all
+        supyagent service inbox:archive --all --provider github
+    """
+    from supyagent.core.service import get_service_client
+
+    if not event_id and not archive_all:
+        console.print("[red]Error:[/red] Provide an event ID or use --all.")
+        sys.exit(1)
+
+    client = get_service_client()
+    if not client:
+        console.print("[yellow]Not connected to service.[/yellow]")
+        console.print("Run [cyan]supyagent connect[/cyan] to authenticate.")
+        sys.exit(1)
+
+    if archive_all:
+        count = client.inbox_archive_all(provider=provider)
+        client.close()
+        if count > 0:
+            console.print(f"[green]Archived {count} event{'s' if count != 1 else ''}.[/green]")
+        else:
+            console.print("[grey62]No events to archive.[/grey62]")
+    else:
+        ok = client.inbox_archive(event_id)
+        client.close()
+        if ok:
+            console.print("[green]Event archived.[/green]")
+        else:
+            console.print(f"[red]Error:[/red] Could not archive event {event_id}.")
+            sys.exit(1)
+
+
+def _format_relative_time(iso_str: str) -> str:
+    """Format an ISO timestamp as a relative time string."""
+    from datetime import datetime, timezone
+
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        diff = (now - dt).total_seconds()
+        minutes = int(diff // 60)
+        hours = int(diff // 3600)
+        days = int(diff // 86400)
+
+        if minutes < 1:
+            return "now"
+        if minutes < 60:
+            return f"{minutes}m"
+        if hours < 24:
+            return f"{hours}h"
+        if days < 7:
+            return f"{days}d"
+        return dt.strftime("%b %d")
+    except (ValueError, TypeError):
+        return ""
 
 
 @service_group.command("run")
