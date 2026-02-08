@@ -3931,6 +3931,126 @@ def status():
 
 
 @cli.command()
+@click.option("--status", "-s", type=click.Choice(["unread", "read", "archived"]), default=None, help="Filter by status")
+@click.option("--provider", "-p", default=None, help="Filter by provider (e.g. github, slack)")
+@click.option("--limit", "-n", default=20, type=int, help="Number of events (default: 20)")
+@click.option("--event-id", "-i", default=None, help="Get a specific event by ID")
+@click.option("--archive", "-a", default=None, help="Archive a specific event by ID")
+@click.option("--archive-all", is_flag=True, help="Archive all events")
+def inbox(
+    status: str | None,
+    provider: str | None,
+    limit: int,
+    event_id: str | None,
+    archive: str | None,
+    archive_all: bool,
+):
+    """
+    View and manage your AI Inbox.
+
+    Shows webhook events from connected integrations (GitHub, Slack, Telegram, etc.).
+
+    \b
+    Examples:
+        supyagent inbox                        # List unread events
+        supyagent inbox -s read                # List read events
+        supyagent inbox -p github              # GitHub events only
+        supyagent inbox -i EVENT_ID            # View a specific event
+        supyagent inbox -a EVENT_ID            # Archive an event
+        supyagent inbox --archive-all          # Archive all events
+    """
+    from supyagent.core.service import get_service_client
+
+    client = get_service_client()
+    if not client:
+        console.print("[yellow]Not connected to service.[/yellow]")
+        console.print("Run [cyan]supyagent connect[/cyan] to authenticate.")
+        return
+
+    # Archive a specific event
+    if archive:
+        success = client.inbox_archive(archive)
+        if success:
+            console.print(f"[green]Archived[/green] event {archive[:12]}...")
+        else:
+            console.print(f"[red]Failed to archive[/red] event {archive}")
+        return
+
+    # Archive all
+    if archive_all:
+        count = client.inbox_archive_all(provider=provider)
+        console.print(f"[green]Archived {count} event(s)[/green]")
+        return
+
+    # Get a specific event
+    if event_id:
+        event = client.inbox_get(event_id)
+        if not event:
+            console.print(f"[red]Event not found:[/red] {event_id}")
+            return
+
+        console.print(Panel(
+            f"[bold]{event.get('provider', '?')}[/bold] / {event.get('event_type', '?')}\n"
+            f"[grey62]{event.get('received_at', '')}[/grey62]\n\n"
+            f"{event.get('summary', 'No summary')}\n\n"
+            f"[grey62]Status: {event.get('status', '?')} | ID: {event.get('id', '?')}[/grey62]",
+            title="Inbox Event",
+            border_style="cyan",
+        ))
+
+        # Show payload
+        payload = event.get("payload")
+        if payload:
+            console.print()
+            console.print("[bright_black]Payload:[/bright_black]")
+            console.print(json.dumps(payload, indent=2, default=str)[:2000])
+        return
+
+    # List events
+    result = client.inbox_list(
+        status=status or "unread",
+        provider=provider,
+        limit=limit,
+    )
+
+    events = result.get("events", [])
+    total = result.get("total", 0)
+
+    if not events:
+        filter_desc = f" ({status or 'unread'})"
+        if provider:
+            filter_desc += f" from {provider}"
+        console.print(f"[grey62]No events{filter_desc}.[/grey62]")
+        return
+
+    table = Table(title=f"Inbox ({total} total)")
+    table.add_column("Provider", style="cyan", width=10)
+    table.add_column("Type", width=22)
+    table.add_column("Summary", ratio=1)
+    table.add_column("When", style="grey62", width=18)
+    table.add_column("ID", style="bright_black", width=12)
+
+    for event in events:
+        received = event.get("received_at", "")
+        if received:
+            # Show relative time or short date
+            received = received[:16].replace("T", " ")
+
+        table.add_row(
+            event.get("provider", "?"),
+            event.get("event_type", "?"),
+            (event.get("summary", "") or "")[:60],
+            received,
+            (event.get("id", ""))[:12] + "...",
+        )
+
+    console.print(table)
+
+    if result.get("has_more"):
+        console.print(f"\n[bright_black]Showing {len(events)} of {total}. Use -n to show more.[/bright_black]")
+
+
+@cli.command()
 @click.option("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
 @click.option("--port", "-p", default=8000, type=int, help="Bind port (default: 8000)")
 @click.option("--reload", is_flag=True, help="Auto-reload on code changes")

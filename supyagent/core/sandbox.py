@@ -122,6 +122,11 @@ class SandboxManager:
         gid = os.getgid()
         cmd.extend(["--user", f"{uid}:{gid}"])
 
+        # Set HOME and cache dirs so tools (uv, pip) work for non-root user
+        cmd.extend(["--env", "HOME=/tmp"])
+        cmd.extend(["--env", "UV_CACHE_DIR=/tmp/uv-cache"])
+        cmd.extend(["--env", "PIP_CACHE_DIR=/tmp/pip-cache"])
+
         # Extra mounts
         for mount in self.config.extra_mounts:
             host = Path(mount.host_path).expanduser().resolve()
@@ -143,13 +148,13 @@ class SandboxManager:
                 f"Failed to start sandbox container: {result.stderr.strip()}"
             )
 
-        # Auto-install uv + supypowers if not present
+        # Auto-install uv + supypowers if not present (as root for write access)
         self._ensure_toolchain()
 
-        # Run user-defined setup commands
+        # Run user-defined setup commands (as root so pip install works)
         for setup_cmd in self.config.setup_commands:
             logger.info("Sandbox setup: %s", setup_cmd)
-            self._exec_in_container(["sh", "-c", setup_cmd], timeout=120)
+            self._exec_in_container(["sh", "-c", setup_cmd], timeout=120, as_root=True)
 
     def _ensure_toolchain(self) -> None:
         """Install uv and supypowers inside the container if not already present."""
@@ -160,12 +165,15 @@ class SandboxManager:
             self._exec_in_container(
                 ["sh", "-c", "pip install uv 2>/dev/null || pip3 install uv"],
                 timeout=120,
+                as_root=True,
             )
         # Check for supypowers
         sp_check = self._exec_in_container(["sh", "-c", "which supypowers"], timeout=10)
         if sp_check.returncode != 0:
             logger.info("Installing supypowers in sandbox container...")
-            self._exec_in_container(["pip", "install", "supypowers"], timeout=120)
+            self._exec_in_container(
+                ["pip", "install", "supypowers"], timeout=120, as_root=True
+            )
 
     def _is_container_running(self) -> bool:
         try:
@@ -188,8 +196,11 @@ class SandboxManager:
         cmd: list[str],
         env: dict[str, str] | None = None,
         timeout: float = 300,
+        as_root: bool = False,
     ) -> subprocess.CompletedProcess:
         exec_cmd = [self.runtime, "exec"]
+        if as_root:
+            exec_cmd.extend(["--user", "root"])
         if env:
             for k, v in env.items():
                 exec_cmd.extend(["--env", f"{k}={v}"])

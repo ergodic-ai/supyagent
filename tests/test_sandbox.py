@@ -25,6 +25,7 @@ from supyagent.models.agent_config import (
     ModelConfig,
     MountConfig,
     SandboxConfig,
+    ServiceConfig,
     ToolPermissions,
 )
 
@@ -49,6 +50,7 @@ def _make_config(
         limits={"max_tool_calls_per_turn": 10},
         workspace=workspace,
         sandbox=sandbox,
+        service=ServiceConfig(enabled=False),
         **overrides,
     )
 
@@ -329,8 +331,9 @@ class TestSandboxManager:
         run_call = mock_run.call_args_list[1]
         cmd = run_call[0][0]
         assert "--env" in cmd
-        env_idx = cmd.index("--env")
-        assert cmd[env_idx + 1] == "MY_KEY=my_val"
+        # Find the user-defined env var (built-in HOME/UV_CACHE_DIR/PIP_CACHE_DIR come first)
+        env_pairs = [cmd[i + 1] for i, v in enumerate(cmd) if v == "--env"]
+        assert "MY_KEY=my_val" in env_pairs
 
     @patch("supyagent.core.sandbox.subprocess.run")
     @patch("shutil.which", return_value="/usr/bin/podman")

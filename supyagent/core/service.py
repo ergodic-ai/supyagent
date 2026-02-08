@@ -117,6 +117,27 @@ class ServiceClient:
             logger.warning(f"Invalid response from service: {e}")
             return []
 
+    @staticmethod
+    def _resolve_path(path: str, arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """
+        Substitute {param} placeholders in a path with values from arguments.
+
+        Returns the resolved path and a copy of arguments with consumed keys removed.
+        E.g. path="/api/v1/inbox/{id}", arguments={"id": "abc"} -> ("/api/v1/inbox/abc", {})
+        """
+        import re
+
+        remaining = dict(arguments)
+        def replacer(match: re.Match) -> str:
+            key = match.group(1)
+            if key in remaining:
+                val = str(remaining.pop(key))
+                return val
+            return match.group(0)  # leave as-is if not found
+
+        resolved = re.sub(r"\{(\w+)\}", replacer, path)
+        return resolved, remaining
+
     def execute_tool(
         self,
         name: str,
@@ -146,15 +167,18 @@ class ServiceClient:
         if not path:
             return {"ok": False, "error": f"No API path for tool '{name}'"}
 
+        # Substitute path parameters (e.g. /inbox/{id} -> /inbox/abc123)
+        path, remaining_args = self._resolve_path(path, arguments)
+
         try:
             if method == "GET":
-                response = self._client.get(path, params=arguments)
+                response = self._client.get(path, params=remaining_args)
             elif method == "POST":
-                response = self._client.post(path, json=arguments)
+                response = self._client.post(path, json=remaining_args)
             elif method == "PATCH":
-                response = self._client.patch(path, json=arguments)
+                response = self._client.patch(path, json=remaining_args)
             elif method == "DELETE":
-                response = self._client.delete(path, params=arguments)
+                response = self._client.delete(path, params=remaining_args)
             else:
                 return {"ok": False, "error": f"Unsupported HTTP method: {method}"}
 
