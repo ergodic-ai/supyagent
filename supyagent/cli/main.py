@@ -221,7 +221,7 @@ def init(tools_dir: str, force: bool, quick: bool):
     "--type",
     "-t",
     "agent_type",
-    type=click.Choice(["interactive", "execution"]),
+    type=click.Choice(["interactive", "execution", "daemon"]),
     default="interactive",
     help="Type of agent to create",
 )
@@ -332,6 +332,42 @@ will_create_tools: true
 limits:
   max_tool_calls_per_turn: 10
 """
+    elif agent_type == "daemon":
+        template = f"""name: {name}
+description: A daemon agent that processes inbox events
+version: "1.0"
+type: daemon
+
+model:
+  provider: {model}
+  temperature: 0.3
+  max_tokens: 4096
+
+schedule:
+  interval: 5m              # Poll every 5 minutes
+  max_events_per_cycle: 10  # Max events per cycle
+  # prompt: "Check if any pending tasks need follow-up"
+
+system_prompt: |
+  You are a daemon agent named {name}. You process inbox events from
+  connected integrations (Slack, GitHub, email, etc.).
+
+  For each event, take the appropriate action using your tools, then
+  archive the event when done.
+
+tools:
+  allow:
+    - "*"
+
+memory:
+  enabled: true
+
+service:
+  enabled: true
+
+limits:
+  max_tool_calls_per_turn: 20
+"""
     else:
         template = f"""name: {name}
 description: An execution agent for automated tasks
@@ -368,6 +404,8 @@ limits:
     console.print(f"  1. Edit [cyan]{agent_path}[/cyan] to customize")
     if agent_type == "execution":
         console.print(f'  2. Run: [cyan]supyagent run {name} "your task"[/cyan]')
+    elif agent_type == "daemon":
+        console.print(f"  2. Run: [cyan]supyagent daemon {name}[/cyan]")
     else:
         console.print(f"  2. Run: [cyan]supyagent chat {name}[/cyan]")
 
@@ -1661,7 +1699,7 @@ def _show_cloud_tools_status() -> None:
     for name, desc in _CLOUD_TOOL_PREVIEWS:
         table.add_row(f"  🔒 {name}", desc)
     console.print(table)
-    console.print(f"  [dim]... and 50+ more across 12 providers[/dim]")
+    console.print("  [dim]... and 50+ more across 12 providers[/dim]")
 
 
 @cli.group("tools")
@@ -2184,6 +2222,130 @@ def run(
     else:
         console_err.print(f"[red]Error:[/red] {result['error']}")
         sys.exit(1)
+
+
+@cli.command()
+@click.argument("agent_name")
+@click.option(
+    "--secrets",
+    "-s",
+    multiple=True,
+    help="Secrets as KEY=VALUE or path to .env file",
+)
+@click.option(
+    "--interval",
+    "-i",
+    default=None,
+    help="Override poll interval (e.g., '5m', '30s', '1h')",
+)
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed cycle output")
+@click.option("--dry-run", is_flag=True, help="Run one cycle and exit")
+def daemon(
+    agent_name: str,
+    secrets: tuple[str, ...],
+    interval: str | None,
+    verbose: bool,
+    dry_run: bool,
+):
+    """
+    Run an agent as a daemon (poll-based event processing).
+
+    AGENT_NAME is the agent to run in daemon mode. The daemon polls the
+    inbox at the configured interval, processes unread events via the LLM,
+    and goes back to sleep.
+
+    \b
+    Examples:
+        supyagent daemon myagent
+        supyagent daemon myagent --interval 1m
+        supyagent daemon myagent --dry-run
+        supyagent daemon myagent --secrets API_KEY=xxx
+    """
+    import signal
+
+    from supyagent.core.daemon import DaemonConfigError, DaemonRunner, parse_interval
+
+    load_config()
+    try:
+        config = load_agent_config(agent_name)
+    except (AgentNotFoundError, AgentConfigError) as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    if config.type != "daemon":
+        console.print(
+            f"[yellow]Warning:[/yellow] Agent '{agent_name}' has type='{config.type}', "
+            "not 'daemon'. Running in daemon mode anyway."
+        )
+
+    # Override interval if provided
+    if interval:
+        try:
+            parse_interval(interval)  # validate
+        except ValueError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            sys.exit(1)
+        config.schedule.interval = interval
+
+    secrets_dict = parse_secrets(secrets)
+
+    try:
+        runner = DaemonRunner(config)
+    except DaemonConfigError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    # Signal handling for graceful shutdown
+    def _handle_shutdown(signum, frame):
+        console.print("\n[yellow]Shutting down after current cycle...[/yellow]")
+        runner.shutdown()
+
+    signal.signal(signal.SIGINT, _handle_shutdown)
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+
+    # Cycle callback
+    def on_cycle(result):
+        if result.skipped:
+            if verbose:
+                console.print(
+                    f"[dim][{_now()}] No events — sleeping "
+                    f"({result.elapsed_seconds:.1f}s)[/dim]"
+                )
+            return
+        status = "[green]OK[/green]" if not result.error else f"[red]ERROR: {result.error}[/red]"
+        console.print(
+            f"[cyan][{_now()}][/cyan] Cycle {result.cycle}: "
+            f"{result.events_found} event(s) in {result.elapsed_seconds:.1f}s — {status}"
+        )
+        if verbose and result.response:
+            console.print(Panel(result.response[:500], title="Response", border_style="dim"))
+        if result.total_unread > result.events_found:
+            console.print(
+                f"  [dim]{result.total_unread - result.events_found} more unread events pending[/dim]"
+            )
+
+    interval_display = interval or config.schedule.interval
+    console.print(
+        f"[bold]Daemon starting:[/bold] {agent_name} "
+        f"(every {interval_display}, max {config.schedule.max_events_per_cycle} events/cycle)"
+    )
+
+    if dry_run:
+        console.print("[dim]Dry run: running one cycle...[/dim]\n")
+        result = runner.run_once(secrets=secrets_dict)
+        on_cycle(result)
+        return
+
+    console.print("[dim]Press Ctrl+C to stop[/dim]\n")
+    runner.run(secrets=secrets_dict, on_cycle=on_cycle)
+    console.print("[green]Daemon stopped.[/green]")
+
+
+def _now() -> str:
+    """Current time as HH:MM:SS for daemon log output."""
+    from datetime import datetime
+
+    return datetime.now().strftime("%H:%M:%S")
 
 
 @cli.command("exec")

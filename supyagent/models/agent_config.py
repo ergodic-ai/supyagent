@@ -271,6 +271,24 @@ class ServiceConfig(BaseModel):
     )
 
 
+class ScheduleConfig(BaseModel):
+    """Daemon schedule configuration."""
+
+    interval: str = Field(
+        default="5m",
+        description="Poll interval (e.g., '30s', '5m', '1h')"
+    )
+    max_events_per_cycle: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum inbox events to process per cycle"
+    )
+    prompt: str | None = Field(
+        default=None,
+        description="Optional scheduled task to run each cycle even with no events"
+    )
+
+
 class AgentConfig(BaseModel):
     """
     Agent configuration loaded from YAML.
@@ -279,7 +297,7 @@ class AgentConfig(BaseModel):
     name: str = Field(..., min_length=1, max_length=50)
     description: str = Field(default="")
     version: str = Field(default="1.0")
-    type: Literal["interactive", "execution"] = Field(default="interactive")
+    type: Literal["interactive", "execution", "daemon"] = Field(default="interactive")
     model: ModelConfig
     system_prompt: str = Field(..., min_length=1)
     tools: ToolPermissions = Field(default_factory=ToolPermissions)
@@ -317,6 +335,10 @@ class AgentConfig(BaseModel):
     service: ServiceConfig = Field(
         default_factory=ServiceConfig,
         description="Service integration settings for third-party tools"
+    )
+    schedule: ScheduleConfig = Field(
+        default_factory=ScheduleConfig,
+        description="Daemon schedule settings (only used when type=daemon)"
     )
 
 
@@ -357,7 +379,7 @@ class MyToolOutput(BaseModel):
 def my_tool(input: MyToolInput) -> MyToolOutput:
     \"\"\"
     Describe what this function does.
-    
+
     Examples:
         >>> my_tool({"value": "test"})
     \"\"\"
@@ -440,6 +462,23 @@ managing contacts, etc.) and you don't have those tools available:
 before suggesting the user connect.
 """
 
+DAEMON_INSTRUCTIONS = """
+
+---
+
+## Daemon Mode
+
+You are running as a daemon agent. Each time you wake up, you receive a batch of \
+inbox events to process.
+
+Key behaviors:
+- Process each event using your available tools
+- Archive events after processing with the inbox archive tool
+- Use memory to track patterns and important context across cycles
+- Be concise in your responses — they are logged, not shown to a user
+- If an event cannot be processed, note the issue and archive it anyway
+"""
+
 THINKING_GUIDELINES = """
 
 ---
@@ -463,12 +502,15 @@ def get_full_system_prompt(
     supypowers_available: bool = True,
     has_service: bool = False,
     sandbox_context: str = "",
+    is_daemon: bool = False,
 ) -> str:
     """
     Get the full system prompt, including tool creation instructions if enabled,
     resilience instructions, cloud service awareness, and sandbox context.
     """
     prompt = config.system_prompt
+    if is_daemon:
+        prompt += DAEMON_INSTRUCTIONS
     if config.will_create_tools:
         prompt += TOOL_CREATION_INSTRUCTIONS
     prompt += THINKING_GUIDELINES
