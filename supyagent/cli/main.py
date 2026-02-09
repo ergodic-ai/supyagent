@@ -3895,6 +3895,83 @@ def service_run(tool_spec: str, args_json: str, input_file: str | None):
 
 
 # =============================================================================
+# Skills Commands
+# =============================================================================
+
+
+@cli.group("skills")
+def skills_group():
+    """Generate skill files for AI coding assistants."""
+    pass
+
+
+@skills_group.command("generate")
+@click.option(
+    "--output",
+    "-o",
+    default=".claude/skills/supy.md",
+    help="Output path (default: .claude/skills/supy.md)",
+)
+@click.option(
+    "--stdout",
+    is_flag=True,
+    help="Print to stdout instead of writing to file",
+)
+def skills_generate(output: str, stdout: bool):
+    """
+    Generate a Claude Code SKILL.md from connected integrations.
+
+    Queries your connected service integrations and generates a skill
+    file that teaches Claude Code how to use them via supyagent CLI.
+
+    \b
+    Examples:
+        supyagent skills generate
+        supyagent skills generate --stdout
+        supyagent skills generate -o custom/path/skill.md
+    """
+    from supyagent.cli.skills import generate_skill_md
+    from supyagent.core.service import get_service_client
+
+    client = get_service_client()
+    if not client:
+        console_err.print("[yellow]Not connected to service.[/yellow]")
+        console_err.print("Run [cyan]supyagent connect[/cyan] to authenticate.")
+        sys.exit(1)
+
+    try:
+        tools = client.discover_tools()
+    finally:
+        client.close()
+
+    if not tools:
+        console_err.print("[yellow]No tools available.[/yellow]")
+        console_err.print(
+            "Connect integrations on the dashboard, then run this command again."
+        )
+        sys.exit(1)
+
+    skill_md = generate_skill_md(tools)
+
+    if stdout:
+        click.echo(skill_md)
+        return
+
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(skill_md)
+
+    providers = {t.get("metadata", {}).get("provider") for t in tools}
+    console_err.print(f"[green]\u2713[/green] Generated [cyan]{output_path}[/cyan]")
+    console_err.print(f"  {len(tools)} tools from {len(providers)} providers")
+    console_err.print()
+    console_err.print(
+        "[dim]Claude Code will automatically use this skill when you ask "
+        "about connected services.[/dim]"
+    )
+
+
+# =============================================================================
 # Service Connection Commands
 # =============================================================================
 
