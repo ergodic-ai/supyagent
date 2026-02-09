@@ -261,7 +261,7 @@ class DaemonRunner(BaseAgentEngine):
             {"role": "user", "content": user_content},
         ]
 
-        max_iterations = self.config.limits.get("max_tool_calls_per_turn", 20)
+        max_iterations = self.config.limits.get("max_tool_calls_per_turn", 100)
 
         error_msg = None
         try:

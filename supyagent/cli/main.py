@@ -58,6 +58,33 @@ _KNOWN_MODEL_PREFIXES = (
 )
 
 
+def _clean_error_message(error: str) -> str:
+    """Extract a clean, human-readable error from verbose LiteLLM error strings."""
+    import re
+
+    # Extract JSON "message" from OpenRouter-style nested errors
+    match = re.search(r'"message"\s*:\s*"([^"]+)"', error)
+    if match:
+        return match.group(1)
+
+    # Strip litellm class prefix: "litellm.APIError: APIError: ..." -> "..."
+    if error.startswith("litellm."):
+        # e.g. "litellm.APIError: APIError: OpenrouterException - {...}"
+        parts = error.split(": ", 2)
+        if len(parts) >= 3:
+            error = parts[2]
+        elif len(parts) == 2:
+            error = parts[1]
+
+    # Deduplicate repeated class names: "APIConnectionError: APIConnectionError:"
+    error = re.sub(r"(\w+Error): \1:", r"\1:", error)
+
+    # Truncate
+    if len(error) > 200:
+        return error[:200] + "..."
+    return error
+
+
 def _warn_model_provider(provider: str) -> None:
     """Print a warning if the model provider string looks invalid."""
     if "/" not in provider:
@@ -366,7 +393,7 @@ service:
   enabled: true
 
 limits:
-  max_tool_calls_per_turn: 20
+  max_tool_calls_per_turn: 100
 """
     else:
         template = f"""name: {name}
@@ -1983,7 +2010,7 @@ def schema():
     _print_model(SupervisorSettings, indent=1)
 
     console.print("\n[bold]limits (dict):[/bold]")
-    console.print("    [cyan]max_tool_calls_per_turn[/cyan] [dim](default: 20)[/dim]")
+    console.print("    [cyan]max_tool_calls_per_turn[/cyan] [dim](default: 100)[/dim]")
     console.print("      [dim]# Max tool calls per user message[/dim]")
     console.print("    [cyan]circuit_breaker_threshold[/cyan] [dim](default: 3)[/dim]")
     console.print("      [dim]# Block a tool after N consecutive failures[/dim]")
@@ -2219,8 +2246,15 @@ def run(
             click.echo("")  # Final newline after streamed content
         else:
             click.echo(result["data"])
+    elif result.get("partial"):
+        # Tools completed work but final LLM response failed
+        n = result.get("tool_calls_completed", 0)
+        console_err.print(
+            f"[yellow]Warning:[/yellow] Agent completed {n} tool call(s) "
+            f"but final response failed: {_clean_error_message(result['error'])}"
+        )
     else:
-        console_err.print(f"[red]Error:[/red] {result['error']}")
+        console_err.print(f"[red]Error:[/red] {_clean_error_message(result['error'])}")
         sys.exit(1)
 
 
@@ -2446,7 +2480,7 @@ def exec_agent(
                 click.echo(result.get("data", ""))
             else:
                 console_err.print(
-                    f"[red]Error:[/red] {result.get('error', 'Unknown error')}"
+                    f"[red]Error:[/red] {_clean_error_message(result.get('error', 'Unknown error'))}"
                 )
                 sys.exit(1)
 
@@ -2454,7 +2488,7 @@ def exec_agent(
         if output_fmt == "json":
             click.echo(json.dumps({"ok": False, "error": str(e)}))
         else:
-            console_err.print(f"[red]Error:[/red] {e}")
+            console_err.print(f"[red]Error:[/red] {_clean_error_message(str(e))}")
         sys.exit(1)
 
 

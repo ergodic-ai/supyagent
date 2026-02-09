@@ -33,7 +33,7 @@ class TestModelConfig:
         """Test model config defaults."""
         config = ModelConfig(provider="openai/gpt-4")
         assert config.temperature == 0.7
-        assert config.max_tokens == 4096
+        assert config.max_tokens is None
 
     def test_temperature_bounds(self):
         """Test temperature validation."""
@@ -47,12 +47,12 @@ class TestModelConfig:
         with pytest.raises(ValidationError):
             ModelConfig(provider="test", temperature=2.1)
 
-    def test_max_tokens_positive(self):
-        """Test max_tokens must be positive."""
-        with pytest.raises(ValidationError):
-            ModelConfig(provider="test", max_tokens=0)
-        with pytest.raises(ValidationError):
-            ModelConfig(provider="test", max_tokens=-100)
+    def test_max_tokens_optional(self):
+        """Test max_tokens accepts None (provider default) and positive values."""
+        config = ModelConfig(provider="test")
+        assert config.max_tokens is None
+        config = ModelConfig(provider="test", max_tokens=8192)
+        assert config.max_tokens == 8192
 
 
 class TestToolPermissions:

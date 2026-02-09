@@ -10,7 +10,11 @@ import litellm
 from litellm import completion
 from litellm.exceptions import (
     APIConnectionError,
+    APIError,
     AuthenticationError,
+    BadRequestError,
+    BudgetExceededError,
+    ContextWindowExceededError,
     NotFoundError,
     RateLimitError,
     ServiceUnavailableError,
@@ -37,6 +41,21 @@ _PROVIDER_KEY_HINTS: dict[str, str] = {
     "together": "TOGETHER_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
 }
+
+
+def _extract_error_message(error: Exception) -> str:
+    """Extract the most useful part of a LiteLLM error message."""
+    import re
+
+    msg = str(error)
+    # Try to extract JSON message from OpenRouter-style errors
+    match = re.search(r'"message"\s*:\s*"([^"]+)"', msg)
+    if match:
+        return match.group(1)
+    # Truncate very long messages
+    if len(msg) > 200:
+        return msg[:200] + "..."
+    return msg
 
 
 class LLMError(Exception):
@@ -75,6 +94,41 @@ def _friendly_llm_error(model: str, error: Exception) -> LLMError:
             original=error,
         )
 
+    if isinstance(error, BudgetExceededError):
+        return LLMError(
+            f"API budget/credits exhausted for '{model}'. "
+            f"Add credits at your provider's dashboard.",
+            original=error,
+        )
+
+    if isinstance(error, ContextWindowExceededError):
+        return LLMError(
+            f"Context too large for '{model}'. "
+            f"Try reducing conversation history or using a model with a larger context window.",
+            original=error,
+        )
+
+    if isinstance(error, BadRequestError):
+        return LLMError(
+            f"Model '{model}' rejected the request. "
+            f"This may indicate incompatible tool schemas or invalid parameters.\n"
+            f"  Details: {_extract_error_message(error)}",
+            original=error,
+        )
+
+    if isinstance(error, APIError):
+        msg = str(error)
+        if any(kw in msg.lower() for kw in ["402", "credits", "insufficient"]):
+            return LLMError(
+                f"Credits exhausted for '{model}'. Add more at your provider's dashboard.\n"
+                f"  {_extract_error_message(error)}",
+                original=error,
+            )
+        return LLMError(
+            f"API error from {provider}: {_extract_error_message(error)}",
+            original=error,
+        )
+
     if isinstance(error, APIConnectionError):
         return LLMError(
             f"Cannot connect to {provider} API. Check your internet connection.\n"
@@ -107,7 +161,7 @@ class LLMClient:
         self,
         model: str,
         temperature: float = 0.7,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         max_retries: int = 3,
         retry_delay: float = 1.0,
         retry_backoff: float = 2.0,
@@ -186,9 +240,11 @@ class LLMClient:
             "model": model,
             "messages": messages,
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
             "stream": stream,
         }
+
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
 
         if tools:
             kwargs["tools"] = tools
@@ -200,7 +256,7 @@ class LLMClient:
         for attempt in range(self.max_retries + 1):
             try:
                 return completion(**kwargs), None
-            except (RateLimitError, ServiceUnavailableError, APIConnectionError) as e:
+            except (RateLimitError, ServiceUnavailableError) as e:
                 last_error = e
                 if attempt < self.max_retries:
                     logger.warning(
@@ -213,7 +269,48 @@ class LLMClient:
                     )
                     time.sleep(delay)
                     delay *= self.retry_backoff
-            except (AuthenticationError, NotFoundError) as e:
+            except APIConnectionError as e:
+                # Sub-classify: credit/budget errors masquerading as connection errors
+                msg = str(e).lower()
+                if any(kw in msg for kw in ["402", "credits", "insufficient", "budget"]):
+                    raise _friendly_llm_error(model, e) from e
+                last_error = e
+                if attempt < self.max_retries:
+                    logger.warning(
+                        "LLM call failed (attempt %d/%d, model %s): %s. Retrying in %.1fs...",
+                        attempt + 1,
+                        self.max_retries + 1,
+                        model,
+                        e,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    delay *= self.retry_backoff
+            except APIError as e:
+                # Sub-classify: credit/budget errors are non-transient
+                msg = str(e).lower()
+                if any(kw in msg for kw in ["402", "credits", "insufficient", "budget"]):
+                    raise _friendly_llm_error(model, e) from e
+                # Other API errors: retry
+                last_error = e
+                if attempt < self.max_retries:
+                    logger.warning(
+                        "LLM call failed (attempt %d/%d, model %s): %s. Retrying in %.1fs...",
+                        attempt + 1,
+                        self.max_retries + 1,
+                        model,
+                        e,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    delay *= self.retry_backoff
+            except (
+                AuthenticationError,
+                NotFoundError,
+                BudgetExceededError,
+                BadRequestError,
+                ContextWindowExceededError,
+            ) as e:
                 # Non-transient: raise immediately, no failover
                 raise _friendly_llm_error(model, e) from e
 

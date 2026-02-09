@@ -261,7 +261,7 @@ class Agent(BaseAgentEngine):
         self.session_manager.append_message(self.session, user_msg)
         self.messages.append({"role": "user", "content": content})
 
-        max_iterations = self.config.limits.get("max_tool_calls_per_turn", 20)
+        max_iterations = self.config.limits.get("max_tool_calls_per_turn", 100)
         media_dir = self._get_media_dir()
 
         # Persistence hooks
@@ -329,7 +329,7 @@ class Agent(BaseAgentEngine):
         self.session_manager.append_message(self.session, user_msg)
         self.messages.append({"role": "user", "content": content})
 
-        max_iterations = self.config.limits.get("max_tool_calls_per_turn", 20)
+        max_iterations = self.config.limits.get("max_tool_calls_per_turn", 100)
 
         for event_type, data in self._run_loop_stream(max_iterations):
             if event_type == "_message":

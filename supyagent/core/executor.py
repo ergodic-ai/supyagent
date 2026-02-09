@@ -147,6 +147,8 @@ class ExecutionRunner(BaseAgentEngine):
         for key, value in self._run_secrets.items():
             os.environ[key] = value
 
+        tool_calls_completed = 0
+
         try:
             # Build the prompt
             if isinstance(task, dict):
@@ -159,38 +161,62 @@ class ExecutionRunner(BaseAgentEngine):
                 {"role": "user", "content": user_content},
             ]
 
-            max_iterations = self.config.limits.get("max_tool_calls_per_turn", 20)
+            max_iterations = self.config.limits.get("max_tool_calls_per_turn", 100)
 
             if stream and on_progress:
                 return self._run_streaming(max_iterations, output_format, on_progress)
 
             # Non-streaming with optional progress callbacks
-            on_tool_start = None
-            on_tool_result = None
+            on_tool_start_cb = None
+            on_tool_result_cb = None
             if on_progress:
 
-                def on_tool_start(
+                def on_tool_start_cb(
                     tool_call_id: str, name: str, arguments: str
                 ) -> None:
                     on_progress("tool_start", {"name": name, "arguments": arguments})
 
-                def on_tool_result(
+                def on_tool_result_cb(
                     tool_call_id: str, name: str, result: dict[str, Any]
                 ) -> None:
+                    nonlocal tool_calls_completed
+                    tool_calls_completed += 1
                     on_progress("tool_end", {"name": name, "result": result})
+
+            else:
+                # Still track tool calls even without progress callback
+                def on_tool_result_cb(
+                    tool_call_id: str, name: str, result: dict[str, Any]
+                ) -> None:
+                    nonlocal tool_calls_completed
+                    tool_calls_completed += 1
 
             content = self._run_loop(
                 max_iterations,
-                on_tool_start=on_tool_start,
-                on_tool_result=on_tool_result,
+                on_tool_start=on_tool_start_cb,
+                on_tool_result=on_tool_result_cb,
             )
             return self._format_output(content, output_format)
 
         except CredentialRequiredError as e:
             return {"ok": False, "error": str(e)}
         except MaxIterationsError:
+            if tool_calls_completed > 0:
+                return {
+                    "ok": False,
+                    "error": "Max tool iterations exceeded",
+                    "partial": True,
+                    "tool_calls_completed": tool_calls_completed,
+                }
             return {"ok": False, "error": "Max tool iterations exceeded"}
         except Exception as e:
+            if tool_calls_completed > 0:
+                return {
+                    "ok": False,
+                    "error": str(e),
+                    "partial": True,
+                    "tool_calls_completed": tool_calls_completed,
+                }
             return {"ok": False, "error": str(e)}
 
     def _run_streaming(

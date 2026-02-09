@@ -7,6 +7,7 @@ Subclasses add their own concerns (session persistence, credential prompting, ou
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -79,6 +80,10 @@ class BaseAgentEngine(ABC):
         self._tool_failure_threshold: int = config.limits.get(
             "circuit_breaker_threshold", 3
         )
+
+        # Repetition detection: track recent tool calls to catch loops
+        self._recent_tool_calls: list[tuple[str, str]] = []  # (name, args_hash)
+        self._repetition_threshold: int = config.limits.get("repetition_threshold", 4)
 
         # Memory system
         self.memory_mgr: MemoryManager | None = None
@@ -233,6 +238,20 @@ class BaseAgentEngine(ABC):
 
         name = tool_call.function.name
 
+        # Repetition detection: block identical tool calls repeated too many times
+        args_hash = hashlib.md5(tool_call.function.arguments.encode()).hexdigest()
+        call_sig = (name, args_hash)
+        repeat_count = self._recent_tool_calls.count(call_sig)
+        if repeat_count >= self._repetition_threshold:
+            return {
+                "ok": False,
+                "error": (
+                    f"Repetitive tool call detected: '{name}' called with identical "
+                    f"arguments {repeat_count + 1} times. Try a different approach."
+                ),
+                "error_type": "repetition_detected",
+            }
+
         # Circuit breaker: block tools that have failed too many times
         if self._tool_failure_counts.get(name, 0) >= self._tool_failure_threshold:
             return {
@@ -272,6 +291,9 @@ class BaseAgentEngine(ABC):
             result = self._execute_supypowers_tool(tool_call)
 
         elapsed_ms = (_time.monotonic() - start) * 1000
+
+        # Track for repetition detection
+        self._recent_tool_calls.append(call_sig)
 
         # Track failures for circuit breaker
         if not result.get("ok", False):
@@ -501,8 +523,9 @@ class BaseAgentEngine(ABC):
         Raises:
             MaxIterationsError: If max iterations exceeded
         """
-        # Reset circuit breaker for new turn
+        # Reset circuit breaker and repetition tracking for new turn
         self._tool_failure_counts.clear()
+        self._recent_tool_calls.clear()
 
         iterations = 0
         content = ""
@@ -602,8 +625,9 @@ class BaseAgentEngine(ABC):
         - ("_tool_result", (tool_call_id, name, result)): Internal hook for subclass persistence
         - ("done", str): Final complete response
         """
-        # Reset circuit breaker for new turn
+        # Reset circuit breaker and repetition tracking for new turn
         self._tool_failure_counts.clear()
+        self._recent_tool_calls.clear()
 
         iterations = 0
         final_content = ""
