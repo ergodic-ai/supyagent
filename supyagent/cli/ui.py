@@ -11,6 +11,13 @@ import json
 import sys
 from pathlib import Path
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+from prompt_toolkit.completion import Completer, Completion, PathCompleter
+from prompt_toolkit.document import Document
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.lexers import Lexer
+from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
@@ -51,37 +58,11 @@ _SLASH_ALIASES: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# prompt_toolkit components (lazy imports to avoid hard crash if missing)
+# prompt_toolkit components
 # ---------------------------------------------------------------------------
 
 
-def _get_prompt_toolkit():
-    """Import prompt_toolkit components. Returns None if unavailable."""
-    try:
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-        from prompt_toolkit.completion import Completer, Completion, PathCompleter
-        from prompt_toolkit.document import Document
-        from prompt_toolkit.history import FileHistory
-        from prompt_toolkit.lexers import Lexer
-        from prompt_toolkit.styles import Style
-
-        return {
-            "PromptSession": PromptSession,
-            "AutoSuggestFromHistory": AutoSuggestFromHistory,
-            "Completer": Completer,
-            "Completion": Completion,
-            "PathCompleter": PathCompleter,
-            "Document": Document,
-            "FileHistory": FileHistory,
-            "Lexer": Lexer,
-            "Style": Style,
-        }
-    except ImportError:
-        return None
-
-
-class ChatCompleter:
+class ChatCompleter(Completer):
     """
     Context-aware completer for the chat input.
 
@@ -93,18 +74,10 @@ class ChatCompleter:
     """
 
     def __init__(self):
-        pt = _get_prompt_toolkit()
-        if pt is None:
-            raise ImportError("prompt_toolkit is required for ChatCompleter")
-        self._Completion = pt["Completion"]
-        self._PathCompleter = pt["PathCompleter"]
-        self._Document = pt["Document"]
-        self._path_completer = self._PathCompleter(expanduser=True)
+        self._path_completer = PathCompleter(expanduser=True)
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
-        _completion_cls = self._Completion
-        _document_cls = self._Document
 
         # -- Slash command completion --
         if text.startswith("/"):
@@ -114,7 +87,7 @@ class ChatCompleter:
                 all_commands = {**SLASH_COMMANDS, **_SLASH_ALIASES}
                 for cmd, desc in all_commands.items():
                     if cmd.startswith(word):
-                        yield _completion_cls(
+                        yield Completion(
                             cmd,
                             start_position=-len(word),
                             display_meta=desc,
@@ -127,18 +100,18 @@ class ChatCompleter:
             rest = parts[1] if len(parts) > 1 else ""
 
             if cmd_part in ("/image", "/export"):
-                sub_doc = _document_cls(rest, len(rest))
+                sub_doc = Document(rest, len(rest))
                 yield from self._path_completer.get_completions(sub_doc, complete_event)
             elif cmd_part == "/creds":
                 if " " not in rest:
                     for action in ("list", "set", "delete"):
                         if action.startswith(rest):
-                            yield _completion_cls(action, start_position=-len(rest))
+                            yield Completion(action, start_position=-len(rest))
             elif cmd_part == "/debug":
                 if " " not in rest:
                     for opt in ("on", "off"):
                         if opt.startswith(rest):
-                            yield _completion_cls(opt, start_position=-len(rest))
+                            yield Completion(opt, start_position=-len(rest))
             return
 
         # -- @-path completion --
@@ -147,12 +120,12 @@ class ChatCompleter:
             path_fragment = text[at_pos + 1 :]
             # Only complete if we haven't moved past the path (no space after it)
             if " " not in path_fragment or path_fragment.endswith("/"):
-                sub_doc = _document_cls(path_fragment, len(path_fragment))
+                sub_doc = Document(path_fragment, len(path_fragment))
                 for c in self._path_completer.get_completions(sub_doc, complete_event):
                     yield c
 
 
-class ChatLexer:
+class ChatLexer(Lexer):
     """Syntax highlighting for chat input: /commands green, @paths blue."""
 
     def lex_document(self, document):
@@ -205,18 +178,13 @@ CHAT_STYLE_DICT = {
 }
 
 
-def create_chat_session(agent_name: str):
+def create_chat_session(agent_name: str) -> PromptSession | None:
     """
     Create a prompt_toolkit PromptSession for the chat command.
 
-    Returns None if not in a real terminal (e.g. under CliRunner in tests)
-    or if prompt_toolkit is not available.
+    Returns None if not in a real terminal (e.g. under CliRunner in tests).
     """
     if not sys.stdin.isatty():
-        return None
-
-    pt = _get_prompt_toolkit()
-    if pt is None:
         return None
 
     try:
@@ -224,12 +192,12 @@ def create_chat_session(agent_name: str):
         history_dir.mkdir(parents=True, exist_ok=True)
         history_file = history_dir / f"{agent_name}.hist"
 
-        return pt["PromptSession"](
+        return PromptSession(
             completer=ChatCompleter(),
             lexer=ChatLexer(),
-            style=pt["Style"].from_dict(CHAT_STYLE_DICT),
-            history=pt["FileHistory"](str(history_file)),
-            auto_suggest=pt["AutoSuggestFromHistory"](),
+            style=Style.from_dict(CHAT_STYLE_DICT),
+            history=FileHistory(str(history_file)),
+            auto_suggest=AutoSuggestFromHistory(),
             enable_history_search=True,
             complete_while_typing=False,
             multiline=False,
