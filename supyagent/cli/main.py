@@ -15,6 +15,14 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from supyagent.cli.ui import (
+    StreamingMarkdownRenderer,
+    create_chat_session,
+    render_reasoning,
+    render_tool_end,
+    render_tool_start,
+)
+
 try:
     from importlib.metadata import version as pkg_version
 
@@ -654,11 +662,24 @@ def chat(
     show_tokens = verbose
     debug_mode = verbose
 
+    # Set up prompt_toolkit session for enhanced input (autocomplete, history)
+    prompt_session = create_chat_session(agent_name)
+
     # Chat loop
     while True:
         try:
-            # Get user input
-            user_input = console.input("[bold blue]You>[/bold blue] ")
+            # Get user input (prompt_toolkit with autocomplete, or fallback)
+            if prompt_session:
+                try:
+                    user_input = prompt_session.prompt("You> ")
+                except KeyboardInterrupt:
+                    console.print("\n[dim]Use /quit to exit[/dim]")
+                    continue
+                except EOFError:
+                    console.print("\n[dim]Goodbye![/dim]")
+                    break
+            else:
+                user_input = console.input("[bold blue]You>[/bold blue] ")
 
             if not user_input.strip():
                 continue
@@ -1081,23 +1102,24 @@ def chat(
                     console.print(f"[bold green]{config.name}>[/bold green]")
 
                     try:
-                        collected_response = ""
+                        img_renderer = StreamingMarkdownRenderer(console)
                         for event_type, data in agent.send_message_stream(
                             multimodal_content
                         ):
                             if event_type == "text":
-                                click.echo(data, nl=False)
-                                collected_response += data
+                                img_renderer.feed(data)
                             elif event_type == "tool_start":
-                                tool_name = data.get("name", "?")
-                                console.print(f"\n  [dim]⚙ {tool_name}...[/dim]")
+                                if img_renderer.has_content():
+                                    img_renderer.flush_raw()
+                                render_tool_start(
+                                    console,
+                                    data.get("name", "?"),
+                                    data.get("arguments"),
+                                )
                             elif event_type == "tool_end":
-                                result = data.get("result", {})
-                                status = "✓" if result.get("ok") else "✗"
-                                console.print(f"  [dim]  {status} done[/dim]")
+                                render_tool_end(console, data.get("result", {}))
                             elif event_type == "done":
-                                pass
-                        click.echo("")
+                                img_renderer.finish()
                     except Exception as e:
                         console.print(f"\n[red]Error: {e}[/red]")
                     console.print()
@@ -1164,68 +1186,37 @@ def chat(
             console.print(f"[bold green]{config.name}>[/bold green]")
 
             try:
-                collected_response = ""
+                renderer = StreamingMarkdownRenderer(console)
                 in_reasoning = False
                 for event_type, data in agent.send_message_stream(user_input):
                     if event_type == "text":
-                        # If we were in reasoning, add newline before text
                         if in_reasoning:
-                            click.echo("")  # End reasoning line
+                            click.echo("")
                             in_reasoning = False
-                        # Print text as it streams
-                        click.echo(data, nl=False)
-                        collected_response += data
+                        renderer.feed(data)
                     elif event_type == "reasoning":
-                        # Show LLM reasoning/thinking if available
                         if not in_reasoning:
-                            # Start of reasoning - show emoji
-                            console.print("[magenta dim]💭 [/magenta dim]", end="")
+                            render_reasoning(console, data, is_first=True)
                             in_reasoning = True
-                        # Stream the reasoning content
-                        console.print(f"[magenta dim]{data}[/magenta dim]", end="")
-                    elif event_type == "tool_start":
-                        # End reasoning if we were in it
-                        if in_reasoning:
-                            click.echo("")  # End reasoning line
-                            in_reasoning = False
-                        # Show tool being called with inputs
-                        tool_name = data.get("name", "unknown")
-                        console.print(f"\n[cyan]⚡ {tool_name}[/cyan]")
-                        # Show tool inputs
-                        if data.get("arguments"):
-                            try:
-                                args = json.loads(data["arguments"])
-                                # Format args compactly on one line if simple
-                                if len(args) <= 2 and all(
-                                    isinstance(v, (str, int, bool))
-                                    for v in args.values()
-                                ):
-                                    args_str = ", ".join(
-                                        f"{k}={repr(v)}" for k, v in args.items()
-                                    )
-                                    console.print(f"[dim]   └─ {args_str}[/dim]")
-                                else:
-                                    args_str = json.dumps(args, indent=2)
-                                    for line in args_str.split("\n"):
-                                        console.print(f"[dim]   {line}[/dim]")
-                            except json.JSONDecodeError:
-                                pass
-                    elif event_type == "tool_end":
-                        # Show tool completed
-                        result = data.get("result", {})
-                        if result.get("ok", False):
-                            console.print("[green]   ✓ done[/green]")
                         else:
-                            error = result.get("error", "failed")
-                            console.print(f"[red]   ✗ {error}[/red]")
-                    elif event_type == "done":
-                        # End reasoning if we were in it
+                            render_reasoning(console, data, is_first=False)
+                    elif event_type == "tool_start":
                         if in_reasoning:
-                            click.echo("")  # End reasoning line
+                            click.echo("")
                             in_reasoning = False
-                        # Ensure newline after streaming
-                        if collected_response:
-                            click.echo("")  # Final newline
+                        # Flush any accumulated text before tool output
+                        if renderer.has_content():
+                            renderer.flush_raw()
+                        render_tool_start(
+                            console, data.get("name", "unknown"), data.get("arguments")
+                        )
+                    elif event_type == "tool_end":
+                        render_tool_end(console, data.get("result", {}))
+                    elif event_type == "done":
+                        if in_reasoning:
+                            click.echo("")
+                            in_reasoning = False
+                        renderer.finish()
 
                 # Show token usage if enabled
                 if show_tokens:
@@ -2295,60 +2286,34 @@ def run(
     if not quiet:
         console_err.print(f"[dim]Running {agent_name}...[/dim]")
 
-    # State for tracking reasoning across callbacks
+    # State for tracking reasoning and streaming renderer
     progress_state = {"in_reasoning": False}
+    run_renderer = StreamingMarkdownRenderer(
+        console, use_live=(not no_stream and output_format == "raw" and sys.stdout.isatty())
+    )
 
     # Progress callback for streaming output and tool display
     def on_progress(event_type: str, data: dict):
         if event_type == "tool_start" and not quiet:
-            # End reasoning if we were in it
             if progress_state["in_reasoning"]:
-                click.echo("")  # End reasoning line
+                click.echo("")
                 progress_state["in_reasoning"] = False
-            tool_name = data.get("name", "unknown")
-            console_err.print(f"[cyan]⚡ {tool_name}[/cyan]")
-            # Always show tool inputs
-            if data.get("arguments"):
-                try:
-                    args = json.loads(data["arguments"])
-                    # Format args compactly on one line if simple
-                    if len(args) <= 2 and all(
-                        isinstance(v, (str, int, bool)) for v in args.values()
-                    ):
-                        args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items())
-                        console_err.print(f"[dim]   └─ {args_str}[/dim]")
-                    else:
-                        args_str = json.dumps(args, indent=2)
-                        for line in args_str.split("\n"):
-                            console_err.print(f"[dim]   {line}[/dim]")
-                except json.JSONDecodeError:
-                    pass
+            if run_renderer.has_content():
+                run_renderer.flush_raw()
+            render_tool_start(console_err, data.get("name", "unknown"), data.get("arguments"))
         elif event_type == "tool_end" and not quiet:
-            tool_name = data.get("name", "unknown")
-            result_data = data.get("result", {})
-            ok = result_data.get("ok", False)
-            if ok:
-                console_err.print("[green]   ✓ done[/green]")
-            else:
-                error = result_data.get("error", "unknown error")
-                console_err.print(f"[red]   ✗ {error}[/red]")
+            render_tool_end(console_err, data.get("result", {}))
         elif event_type == "reasoning" and verbose:
-            # Show LLM reasoning/thinking if available
             if not progress_state["in_reasoning"]:
-                # Start of reasoning - show emoji
-                console_err.print("[magenta dim]💭 [/magenta dim]", end="")
+                render_reasoning(console_err, data.get("content", ""), is_first=True)
                 progress_state["in_reasoning"] = True
-            # Stream the reasoning content
-            console_err.print(
-                f"[magenta dim]{data.get('content', '')}[/magenta dim]", end=""
-            )
+            else:
+                render_reasoning(console_err, data.get("content", ""), is_first=False)
         elif event_type == "streaming" and not no_stream:
-            # End reasoning if we were in it
             if progress_state["in_reasoning"]:
-                click.echo("")  # End reasoning line
+                click.echo("")
                 progress_state["in_reasoning"] = False
-            # Print streamed content directly
-            click.echo(data.get("content", ""), nl=False)
+            run_renderer.feed(data.get("content", ""))
 
     # Determine if we should use streaming
     use_stream = not no_stream and output_format == "raw"
@@ -2361,13 +2326,19 @@ def run(
         stream=use_stream,
     )
 
+    # Finalize streaming renderer if it was used
+    if use_stream and run_renderer.has_content():
+        run_renderer.finish()
+
     # Output result
     if output_format == "json":
         click.echo(json.dumps(result, indent=2))
     elif result["ok"]:
-        # If we streamed, add a newline; otherwise print the result
         if use_stream:
-            click.echo("")  # Final newline after streamed content
+            pass  # Already rendered by the streaming renderer above
+        elif sys.stdout.isatty():
+            # Render as markdown in terminal
+            console.print(Markdown(result["data"]))
         else:
             click.echo(result["data"])
     elif result.get("partial"):
