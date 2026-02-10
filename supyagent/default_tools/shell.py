@@ -26,6 +26,10 @@ class RunCommandInput(BaseModel):
     timeout: int = Field(
         default=60, description="Maximum seconds to wait for command"
     )
+    max_output: int = Field(
+        default=100000,
+        description="Maximum bytes for stdout+stderr combined (0 = unlimited)",
+    )
 
 
 class RunCommandOutput(BaseModel):
@@ -36,6 +40,50 @@ class RunCommandOutput(BaseModel):
     stderr: str
     exit_code: int
     command: str
+
+
+def _truncate_output(text: str, max_bytes: int) -> str:
+    """Truncate output preserving start, end, and error lines from middle."""
+    if max_bytes <= 0 or len(text) <= max_bytes:
+        return text
+
+    error_patterns = ["error", "Error", "ERROR", "failed", "Failed", "FAILED",
+                      "exception", "Exception", "Traceback", "panic", "PANIC"]
+
+    lines = text.splitlines(keepends=True)
+    keep_start = int(max_bytes * 0.4)
+    keep_end = int(max_bytes * 0.4)
+
+    prefix_lines, prefix_bytes = [], 0
+    for line in lines:
+        if prefix_bytes + len(line) > keep_start:
+            break
+        prefix_lines.append(line)
+        prefix_bytes += len(line)
+
+    suffix_lines, suffix_bytes = [], 0
+    for line in reversed(lines):
+        if suffix_bytes + len(line) > keep_end:
+            break
+        suffix_lines.insert(0, line)
+        suffix_bytes += len(line)
+
+    middle_start = len(prefix_lines)
+    middle_end = len(lines) - len(suffix_lines)
+    error_lines = []
+    for i in range(middle_start, min(middle_end, len(lines))):
+        if any(p in lines[i] for p in error_patterns):
+            error_lines.append(lines[i])
+
+    truncated_bytes = len(text) - prefix_bytes - suffix_bytes
+    if error_lines:
+        separator = f"\n[... truncated {truncated_bytes} bytes, key lines preserved ...]\n"
+        separator += "".join(error_lines[:20])
+        separator += "\n[...]\n"
+    else:
+        separator = f"\n[... truncated {truncated_bytes} bytes ...]\n"
+
+    return "".join(prefix_lines) + separator + "".join(suffix_lines)
 
 
 def run_command(input: RunCommandInput) -> RunCommandOutput:
@@ -62,10 +110,13 @@ def run_command(input: RunCommandInput) -> RunCommandOutput:
             cwd=working_dir,
         )
 
+        stdout = _truncate_output(result.stdout, input.max_output)
+        stderr = _truncate_output(result.stderr, input.max_output)
+
         return RunCommandOutput(
             ok=result.returncode == 0,
-            stdout=result.stdout,
-            stderr=result.stderr,
+            stdout=stdout,
+            stderr=stderr,
             exit_code=result.returncode,
             command=input.command,
         )
@@ -99,6 +150,10 @@ class RunScriptInput(BaseModel):
         default=None, description="Working directory"
     )
     timeout: int = Field(default=120, description="Max seconds to wait")
+    max_output: int = Field(
+        default=100000,
+        description="Maximum bytes for stdout+stderr combined (0 = unlimited)",
+    )
 
 
 class RunScriptOutput(BaseModel):
@@ -131,10 +186,13 @@ def run_script(input: RunScriptInput) -> RunScriptOutput:
             cwd=working_dir,
         )
 
+        stdout = _truncate_output(result.stdout, input.max_output)
+        stderr = _truncate_output(result.stderr, input.max_output)
+
         return RunScriptOutput(
             ok=result.returncode == 0,
-            stdout=result.stdout,
-            stderr=result.stderr,
+            stdout=stdout,
+            stderr=stderr,
             exit_code=result.returncode,
         )
 

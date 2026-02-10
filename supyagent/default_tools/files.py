@@ -24,6 +24,10 @@ class ReadFileInput(BaseModel):
 
     path: str = Field(description="Path to the file to read")
     encoding: str = Field(default="utf-8", description="File encoding")
+    include_line_numbers: bool = Field(
+        default=True,
+        description="Prefix each line with its 1-based line number",
+    )
 
 
 class ReadFileOutput(BaseModel):
@@ -55,13 +59,23 @@ def read_file(input: ReadFileInput) -> ReadFileOutput:
             return ReadFileOutput(ok=False, error=f"Not a file: {path}")
 
         size = p.stat().st_size
-        if size > 10 * 1024 * 1024:
+        if size > 50 * 1024 * 1024:
             return ReadFileOutput(
                 ok=False,
-                error=f"File too large ({size} bytes). Maximum is 10MB.",
+                error=f"File too large ({size} bytes). Maximum is 50MB.",
             )
 
         content = p.read_text(encoding=input.encoding)
+
+        if input.include_line_numbers and content:
+            lines = content.splitlines()
+            width = len(str(len(lines)))
+            content = "\n".join(
+                f"{str(i+1).rjust(width)}: {line}" for i, line in enumerate(lines)
+            )
+            if not content.endswith("\n"):
+                content += "\n"
+
         return ReadFileOutput(
             ok=True,
             content=content,

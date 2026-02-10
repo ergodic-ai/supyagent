@@ -305,19 +305,30 @@ class ContextManager:
         # Build summarization prompt
         conversation_text = self._format_messages_for_summary(messages_to_summarize)
 
-        summary_prompt = f"""Summarize this conversation concisely. Preserve the following:
+        summary_prompt = f"""Extract a structured state snapshot from this conversation.
 
-1. Key topics discussed and decisions made
-2. Important tool results that were referenced later (data values, IDs, URLs, file paths)
-3. Any credentials, API keys, or configuration established during the conversation
-4. Tasks completed and tasks still pending
-5. Working context needed to continue (e.g., current file being edited, active project)
+## Files Modified
+- List each file path and what was changed
+
+## Key Decisions
+- List decisions made and their rationale
+
+## Important Values
+- Preserve exact file paths, URLs, IDs, error messages, configuration values
+
+## Current State
+- What task is in progress
+- What was the last action taken
+- What is the expected next step
+
+## Pending Tasks
+- List remaining work items
 
 Rules:
-- Keep concrete values (IDs, names, paths) rather than vague descriptions
-- If a tool returned data that the user or assistant referenced, keep that data
-- Omit tool results that were acknowledged but not reused
-- Keep the summary under 500 words
+- Preserve ALL file paths, error messages, URLs, IDs, and configuration values exactly
+- Preserve tool results that contain data (not just "ok: true")
+- Keep the snapshot under 600 words
+- Use the exact section format above
 
 Conversation:
 {conversation_text}
@@ -338,19 +349,30 @@ Summary:"""
                 conversation_text[:max_chars]
                 + "\n... [truncated for summarization]"
             )
-            summary_prompt = f"""Summarize this conversation concisely. Preserve the following:
+            summary_prompt = f"""Extract a structured state snapshot from this conversation.
 
-1. Key topics discussed and decisions made
-2. Important tool results that were referenced later (data values, IDs, URLs, file paths)
-3. Any credentials, API keys, or configuration established during the conversation
-4. Tasks completed and tasks still pending
-5. Working context needed to continue (e.g., current file being edited, active project)
+## Files Modified
+- List each file path and what was changed
+
+## Key Decisions
+- List decisions made and their rationale
+
+## Important Values
+- Preserve exact file paths, URLs, IDs, error messages, configuration values
+
+## Current State
+- What task is in progress
+- What was the last action taken
+- What is the expected next step
+
+## Pending Tasks
+- List remaining work items
 
 Rules:
-- Keep concrete values (IDs, names, paths) rather than vague descriptions
-- If a tool returned data that the user or assistant referenced, keep that data
-- Omit tool results that were acknowledged but not reused
-- Keep the summary under 500 words
+- Preserve ALL file paths, error messages, URLs, IDs, and configuration values exactly
+- Preserve tool results that contain data (not just "ok: true")
+- Keep the snapshot under 600 words
+- Use the exact section format above
 
 Conversation:
 {conversation_text}

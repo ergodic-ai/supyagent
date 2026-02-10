@@ -8,8 +8,11 @@ Search file contents by pattern (regex or literal) with structured output
 including file paths, line numbers, and surrounding context.
 """
 
+import json as json_mod
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import List, Optional
 
@@ -57,6 +60,10 @@ class SearchInput(BaseModel):
     include_hidden: bool = Field(
         default=False,
         description="Include hidden files/directories (starting with .)",
+    )
+    multiline: bool = Field(
+        default=False,
+        description="Enable multiline matching (requires ripgrep)",
     )
 
 
@@ -111,6 +118,153 @@ def _is_binary(path: Path) -> bool:
     return path.suffix.lower() in _BINARY_EXTENSIONS
 
 
+def _search_with_ripgrep(input: SearchInput) -> SearchOutput:
+    """Search using ripgrep (rg) for faster results. Returns SearchOutput or raises."""
+    cmd = ["rg", "--json"]
+
+    if not input.regex:
+        cmd.append("--fixed-strings")
+    if not input.case_sensitive:
+        cmd.append("--ignore-case")
+    if input.context_lines > 0:
+        cmd.extend(["-C", str(min(input.context_lines, 5))])
+    if input.max_results > 0:
+        cmd.extend(["--max-count", str(input.max_results)])
+    if input.include_hidden:
+        cmd.append("--hidden")
+    if input.multiline:
+        cmd.extend(["--multiline", "--multiline-dotall"])
+    if input.glob and input.glob != "*":
+        cmd.extend(["--glob", input.glob])
+
+    cmd.append(input.pattern)
+    cmd.append(os.path.expanduser(input.path))
+
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=60,
+    )
+
+    # rg returns 1 for no matches, 2+ for errors
+    if result.returncode >= 2:
+        raise RuntimeError(f"ripgrep error: {result.stderr}")
+
+    matches: List[SearchMatch] = []
+    files_seen: set[str] = set()
+    context_before: List[str] = []
+    context_after_target: SearchMatch | None = None
+    context_after_remaining = 0
+
+    for line in result.stdout.splitlines():
+        try:
+            obj = json_mod.loads(line)
+        except json_mod.JSONDecodeError:
+            continue
+
+        msg_type = obj.get("type")
+
+        if msg_type == "match":
+            # Flush pending context_after
+            if context_after_target is not None:
+                context_after_target = None
+                context_after_remaining = 0
+
+            data = obj["data"]
+            file_path = data["path"]["text"]
+            files_seen.add(file_path)
+            line_number = data["line_number"]
+            line_text = data["lines"]["text"].rstrip("\n")
+
+            match = SearchMatch(
+                file=file_path,
+                line_number=line_number,
+                line=line_text,
+                context_before=list(context_before),
+                context_after=[],
+            )
+            matches.append(match)
+            context_before = []
+            context_after_target = match
+            context_after_remaining = min(input.context_lines, 5)
+
+            if len(matches) >= input.max_results:
+                break
+
+        elif msg_type == "context":
+            data = obj["data"]
+            line_text = data["lines"]["text"].rstrip("\n")
+
+            if context_after_target is not None and context_after_remaining > 0:
+                context_after_target.context_after.append(line_text)
+                context_after_remaining -= 1
+                if context_after_remaining == 0:
+                    context_after_target = None
+            else:
+                context_before.append(line_text)
+                if len(context_before) > min(input.context_lines, 5):
+                    context_before.pop(0)
+
+    truncated = len(matches) >= input.max_results
+
+    return SearchOutput(
+        ok=True,
+        matches=matches,
+        total_matches=len(matches),
+        files_searched=len(files_seen),
+        truncated=truncated,
+    )
+
+
+def _count_with_ripgrep(input: "CountMatchesInput") -> "CountMatchesOutput":
+    """Count matches using ripgrep (rg -c). Returns CountMatchesOutput or raises."""
+    cmd = ["rg", "--count"]
+
+    if not input.regex:
+        cmd.append("--fixed-strings")
+    if not input.case_sensitive:
+        cmd.append("--ignore-case")
+    if input.glob and input.glob != "*":
+        cmd.extend(["--glob", input.glob])
+
+    cmd.append(input.pattern)
+    cmd.append(os.path.expanduser(input.path))
+
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=60,
+    )
+
+    if result.returncode >= 2:
+        raise RuntimeError(f"ripgrep error: {result.stderr}")
+
+    by_file: List[FileMatchCount] = []
+    total = 0
+    files_searched = 0
+
+    for line in result.stdout.splitlines():
+        if ":" not in line:
+            continue
+        # rg -c outputs "path:count"
+        parts = line.rsplit(":", 1)
+        if len(parts) == 2:
+            file_path, count_str = parts
+            try:
+                count = int(count_str)
+            except ValueError:
+                continue
+            files_searched += 1
+            if count > 0:
+                by_file.append(FileMatchCount(file=file_path, count=count))
+                total += count
+
+    by_file.sort(key=lambda x: x.count, reverse=True)
+
+    return CountMatchesOutput(
+        ok=True,
+        total=total,
+        by_file=by_file,
+        files_searched=files_searched,
+    )
+
+
 def search(input: SearchInput) -> SearchOutput:
     """
     Search for a pattern across files in a directory.
@@ -124,6 +278,11 @@ def search(input: SearchInput) -> SearchOutput:
         >>> search({"pattern": "import.*json", "regex": True, "glob": "*.py"})
     """
     try:
+        if shutil.which("rg"):
+            try:
+                return _search_with_ripgrep(input)
+            except Exception:
+                pass  # Fall through to Python implementation
         root = Path(os.path.expanduser(input.path))
         if not root.exists():
             return SearchOutput(ok=False, error=f"Path not found: {input.path}")
@@ -269,6 +428,11 @@ def count_matches(input: CountMatchesInput) -> CountMatchesOutput:
         >>> count_matches({"pattern": "console\\.log", "regex": True, "glob": "*.ts"})
     """
     try:
+        if shutil.which("rg"):
+            try:
+                return _count_with_ripgrep(input)
+            except Exception:
+                pass  # Fall through to Python implementation
         root = Path(os.path.expanduser(input.path))
         if not root.exists():
             return CountMatchesOutput(ok=False, error=f"Path not found: {input.path}")

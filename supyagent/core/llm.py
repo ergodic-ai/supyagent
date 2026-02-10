@@ -166,6 +166,7 @@ class LLMClient:
         retry_delay: float = 1.0,
         retry_backoff: float = 2.0,
         fallback_models: list[str] | None = None,
+        cache: bool = True,
     ):
         """
         Initialize the LLM client.
@@ -178,6 +179,7 @@ class LLMClient:
             retry_delay: Initial delay between retries (seconds)
             retry_backoff: Exponential backoff multiplier
             fallback_models: Fallback model identifiers tried when primary exhausts retries
+            cache: Enable prompt caching when supported by the provider
         """
         self.model = model
         self.temperature = temperature
@@ -186,6 +188,7 @@ class LLMClient:
         self.retry_delay = retry_delay
         self.retry_backoff = retry_backoff
         self.fallback_models = fallback_models or []
+        self.cache = cache
 
     def chat(
         self,
@@ -249,6 +252,9 @@ class LLMClient:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+
+        if self.cache and "anthropic" in model.lower():
+            kwargs["extra_headers"] = {"anthropic-beta": "prompt-caching-2024-07-31"}
 
         last_error: Exception | None = None
         delay = self.retry_delay

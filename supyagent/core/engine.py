@@ -11,7 +11,9 @@ import hashlib
 import json
 import logging
 import os
+import threading
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Generator
 
 logger = logging.getLogger(__name__)
@@ -69,6 +71,7 @@ class BaseAgentEngine(ABC):
             retry_delay=config.model.retry_delay,
             retry_backoff=config.model.retry_backoff,
             fallback_models=config.model.fallback,
+            cache=config.model.cache,
         )
 
         self.tools: list[dict[str, Any]] = []
@@ -84,6 +87,9 @@ class BaseAgentEngine(ABC):
         # Repetition detection: track recent tool calls to catch loops
         self._recent_tool_calls: list[tuple[str, str]] = []  # (name, args_hash)
         self._repetition_threshold: int = config.limits.get("repetition_threshold", 4)
+
+        # Lock for thread-safe access to circuit breaker / repetition state
+        self._dispatch_lock = threading.Lock()
 
         # Memory system
         self.memory_mgr: MemoryManager | None = None
@@ -238,30 +244,30 @@ class BaseAgentEngine(ABC):
 
         name = tool_call.function.name
 
-        # Repetition detection: block identical tool calls repeated too many times
+        # Thread-safe check of repetition and circuit breaker
         args_hash = hashlib.md5(tool_call.function.arguments.encode()).hexdigest()
         call_sig = (name, args_hash)
-        repeat_count = self._recent_tool_calls.count(call_sig)
-        if repeat_count >= self._repetition_threshold:
-            return {
-                "ok": False,
-                "error": (
-                    f"Repetitive tool call detected: '{name}' called with identical "
-                    f"arguments {repeat_count + 1} times. Try a different approach."
-                ),
-                "error_type": "repetition_detected",
-            }
+        with self._dispatch_lock:
+            repeat_count = self._recent_tool_calls.count(call_sig)
+            if repeat_count >= self._repetition_threshold:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"Repetitive tool call detected: '{name}' called with identical "
+                        f"arguments {repeat_count + 1} times. Try a different approach."
+                    ),
+                    "error_type": "repetition_detected",
+                }
 
-        # Circuit breaker: block tools that have failed too many times
-        if self._tool_failure_counts.get(name, 0) >= self._tool_failure_threshold:
-            return {
-                "ok": False,
-                "error": (
-                    f"Tool '{name}' has failed {self._tool_failure_threshold} times "
-                    "consecutively. Please try a different approach or tool."
-                ),
-                "error_type": "circuit_breaker",
-            }
+            if self._tool_failure_counts.get(name, 0) >= self._tool_failure_threshold:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"Tool '{name}' has failed {self._tool_failure_threshold} times "
+                        "consecutively. Please try a different approach or tool."
+                    ),
+                    "error_type": "circuit_breaker",
+                }
 
         start = _time.monotonic()
         is_service = name in self._service_tool_metadata
@@ -279,9 +285,15 @@ class BaseAgentEngine(ABC):
             try:
                 args = json.loads(tool_call.function.arguments)
             except json.JSONDecodeError:
-                result = {"ok": False, "error": "Invalid JSON arguments", "error_type": "invalid_args"}
-                self._tool_failure_counts[name] = self._tool_failure_counts.get(name, 0) + 1
-                return result
+                with self._dispatch_lock:
+                    self._tool_failure_counts[name] = (
+                        self._tool_failure_counts.get(name, 0) + 1
+                    )
+                return {
+                    "ok": False,
+                    "error": "Invalid JSON arguments",
+                    "error_type": "invalid_args",
+                }
             result = execute_process_tool(name, args)
         elif is_service:
             # 3. Service tools (HTTP routing to supyagent_service)
@@ -292,14 +304,15 @@ class BaseAgentEngine(ABC):
 
         elapsed_ms = (_time.monotonic() - start) * 1000
 
-        # Track for repetition detection
-        self._recent_tool_calls.append(call_sig)
-
-        # Track failures for circuit breaker
-        if not result.get("ok", False):
-            self._tool_failure_counts[name] = self._tool_failure_counts.get(name, 0) + 1
-        else:
-            self._tool_failure_counts[name] = 0  # Reset on success
+        # Thread-safe tracking of repetition and failures
+        with self._dispatch_lock:
+            self._recent_tool_calls.append(call_sig)
+            if not result.get("ok", False):
+                self._tool_failure_counts[name] = (
+                    self._tool_failure_counts.get(name, 0) + 1
+                )
+            else:
+                self._tool_failure_counts[name] = 0  # Reset on success
 
         # Track telemetry
         if self.telemetry:
@@ -571,33 +584,58 @@ class BaseAgentEngine(ABC):
                 if not tool_calls:
                     return content
 
-                # Execute each tool call
-                for tc in tool_calls:
-                    tc_obj = ToolCallObj(tc["id"], tc["function"]["name"], tc["function"]["arguments"])
+                # Fire all on_tool_start callbacks
+                if on_tool_start:
+                    for tc in tool_calls:
+                        on_tool_start(
+                            tc["id"], tc["function"]["name"], tc["function"]["arguments"]
+                        )
 
-                    if on_tool_start:
-                        on_tool_start(tc["id"], tc["function"]["name"], tc["function"]["arguments"])
-
+                # Execute tool calls in parallel
+                def _execute_single(tc: dict[str, Any]) -> tuple[dict, dict, str | list]:
+                    tc_obj = ToolCallObj(
+                        tc["id"], tc["function"]["name"], tc["function"]["arguments"]
+                    )
                     result = self._dispatch_tool_call(tc_obj)
-
-                    # Detect images in tool result and build multimodal content
                     images = detect_images_in_tool_result(result)
                     if images:
-                        tool_content: str | list[dict[str, Any]] = [make_text_content_part(json.dumps(result))]
+                        tc_content: str | list[dict[str, Any]] = [
+                            make_text_content_part(json.dumps(result))
+                        ]
                         for img_path in images:
                             try:
-                                tool_content.append(make_image_content_part(img_path))
+                                tc_content.append(make_image_content_part(img_path))
                             except (FileNotFoundError, ValueError):
                                 pass
                     else:
-                        tool_content = json.dumps(result)
+                        tc_content = json.dumps(result)
+                    return tc, result, tc_content
 
+                max_workers = min(len(tool_calls), 5)
+                results_ordered: list[tuple[dict, dict, str | list]] = []
+
+                if len(tool_calls) == 1:
+                    # Fast path: no thread overhead for single tool call
+                    results_ordered.append(_execute_single(tool_calls[0]))
+                else:
+                    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        futures = {
+                            executor.submit(_execute_single, tc): i
+                            for i, tc in enumerate(tool_calls)
+                        }
+                        indexed: dict[int, tuple] = {}
+                        for future in futures:
+                            idx = futures[future]
+                            indexed[idx] = future.result()
+                        results_ordered = [indexed[i] for i in range(len(tool_calls))]
+
+                # Append results in original order and fire callbacks
+                for tc, result, tool_content in results_ordered:
                     self.messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
                         "content": tool_content,
                     })
-
                     if on_tool_result:
                         on_tool_result(tc["id"], tc["function"]["name"], result)
 
@@ -691,30 +729,59 @@ class BaseAgentEngine(ABC):
                 final_content = collected_content
                 break
 
-            # Execute each tool call
+            # Yield all tool_start events
             for tc_dict in collected_tool_calls:
-                tool_name = tc_dict["function"]["name"]
-                tool_args = tc_dict["function"]["arguments"]
-                tool_id = tc_dict["id"]
+                yield (
+                    "tool_start",
+                    {
+                        "id": tc_dict["id"],
+                        "name": tc_dict["function"]["name"],
+                        "arguments": tc_dict["function"]["arguments"],
+                    },
+                )
 
-                yield ("tool_start", {"id": tool_id, "name": tool_name, "arguments": tool_args})
-
-                tc_obj = ToolCallObj(tool_id, tool_name, tool_args)
-                result = self._dispatch_tool_call(tc_obj)
-
-                yield ("tool_end", {"id": tool_id, "name": tool_name, "result": result})
-
-                # Detect images in tool result and build multimodal content
-                images = detect_images_in_tool_result(result)
-                if images:
-                    tool_content: str | list[dict[str, Any]] = [make_text_content_part(json.dumps(result))]
-                    for img_path in images:
+            # Execute tool calls in parallel
+            def _exec_stream(tcd: dict[str, Any]) -> tuple[dict, dict, str | list]:
+                tc_obj = ToolCallObj(
+                    tcd["id"], tcd["function"]["name"], tcd["function"]["arguments"]
+                )
+                res = self._dispatch_tool_call(tc_obj)
+                imgs = detect_images_in_tool_result(res)
+                if imgs:
+                    tc_cont: str | list[dict[str, Any]] = [
+                        make_text_content_part(json.dumps(res))
+                    ]
+                    for ip in imgs:
                         try:
-                            tool_content.append(make_image_content_part(img_path))
+                            tc_cont.append(make_image_content_part(ip))
                         except (FileNotFoundError, ValueError):
                             pass
                 else:
-                    tool_content = json.dumps(result)
+                    tc_cont = json.dumps(res)
+                return tcd, res, tc_cont
+
+            max_w = min(len(collected_tool_calls), 5)
+            stream_results: list[tuple[dict, dict, str | list]] = []
+
+            if len(collected_tool_calls) == 1:
+                stream_results.append(_exec_stream(collected_tool_calls[0]))
+            else:
+                with ThreadPoolExecutor(max_workers=max_w) as executor:
+                    futs = {
+                        executor.submit(_exec_stream, tcd): i
+                        for i, tcd in enumerate(collected_tool_calls)
+                    }
+                    idx_map: dict[int, tuple] = {}
+                    for fut in futs:
+                        idx_map[futs[fut]] = fut.result()
+                    stream_results = [idx_map[i] for i in range(len(collected_tool_calls))]
+
+            # Yield tool_end events and append messages in order
+            for tc_dict, result, tool_content in stream_results:
+                tool_id = tc_dict["id"]
+                tool_name = tc_dict["function"]["name"]
+
+                yield ("tool_end", {"id": tool_id, "name": tool_name, "result": result})
 
                 self.messages.append({
                     "role": "tool",

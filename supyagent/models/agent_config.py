@@ -27,6 +27,10 @@ class ModelConfig(BaseModel):
         default_factory=list,
         description="Fallback model identifiers tried in order when primary fails on transient errors",
     )
+    cache: bool = Field(
+        default=True,
+        description="Enable prompt caching when supported by the provider",
+    )
 
 
 class ToolPermissions(BaseModel):

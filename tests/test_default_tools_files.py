@@ -65,7 +65,7 @@ def workspace(tmp_path):
 
 class TestReadFile:
     def test_read_existing_file(self, workspace):
-        result = read_file(ReadFileInput(path=str(workspace / "hello.txt")))
+        result = read_file(ReadFileInput(path=str(workspace / "hello.txt"), include_line_numbers=False))
         assert result.ok is True
         assert result.content == "Hello, world!\n"
         assert result.size is not None
@@ -503,7 +503,7 @@ class TestFileRoundTrips:
         path = str(workspace / "roundtrip.txt")
         content = "Round trip content\nWith multiple lines\n"
         write_file(WriteFileInput(path=path, content=content))
-        result = read_file(ReadFileInput(path=path))
+        result = read_file(ReadFileInput(path=path, include_line_numbers=False))
         assert result.ok is True
         assert result.content == content
 
@@ -523,6 +523,6 @@ class TestFileRoundTrips:
         copy_file(CopyFileInput(source=src, destination=dst))
         delete_file(DeleteFileInput(path=src))
         assert not Path(src).exists()
-        result = read_file(ReadFileInput(path=dst))
+        result = read_file(ReadFileInput(path=dst, include_line_numbers=False))
         assert result.ok is True
         assert result.content == "Hello, world!\n"
