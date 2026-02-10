@@ -1,6 +1,6 @@
 [project]
 name = "supyagent"
-version = "0.5.2"
+version = "0.5.3"
 description = "LLM agents powered by supypowers - build AI agents with tool use, multi-agent orchestration, and secure credential management"
 readme = "README.md"
 requires-python = ">=3.11"

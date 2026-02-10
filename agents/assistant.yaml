@@ -25,6 +25,11 @@ tools:
 
 will_create_tools: true
 
+delegates:
+  - researcher
+  - coder
+  - writer
+
 service:
   enabled: true
 

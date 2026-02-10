@@ -7,11 +7,14 @@ from supyagent.cli.skills import (
     _extract_action,
     _generate_example_args,
     _placeholder_for_type,
+    _skill_display_name,
+    _skill_key,
+    generate_skill_files,
     generate_skill_md,
 )
 
 
-def _make_tool(name, description, provider, properties=None, required=None):
+def _make_tool(name, description, provider, properties=None, required=None, service="test"):
     """Helper to create a mock tool in OpenAI function-calling format."""
     params = {"type": "object", "properties": properties or {}}
     if required:
@@ -23,7 +26,12 @@ def _make_tool(name, description, provider, properties=None, required=None):
             "description": description,
             "parameters": params,
         },
-        "metadata": {"provider": provider, "service": "test", "method": "POST", "path": "/test"},
+        "metadata": {
+            "provider": provider,
+            "service": service,
+            "method": "POST",
+            "path": "/test",
+        },
     }
 
 
@@ -73,7 +81,9 @@ class TestPlaceholderForType:
         assert _placeholder_for_type("user_id", "string", {}) == "abc123"
 
     def test_enum_parameter(self):
-        assert _placeholder_for_type("status", "string", {"enum": ["active", "inactive"]}) == "active"
+        assert (
+            _placeholder_for_type("status", "string", {"enum": ["active", "inactive"]}) == "active"
+        )
 
     def test_integer(self):
         assert _placeholder_for_type("limit", "integer", {}) == 10
@@ -118,12 +128,122 @@ class TestGenerateExampleArgs:
         assert optional_count <= 1
 
 
+class TestSkillKey:
+    def test_google_splits_by_service(self):
+        tool = _make_tool("gmail_send", "Send.", "google", service="gmail")
+        assert _skill_key(tool) == "gmail"
+
+    def test_microsoft_splits_by_service(self):
+        tool = _make_tool("outlook_send", "Send.", "microsoft", service="mail")
+        assert _skill_key(tool) == "mail"
+
+    def test_other_providers_use_provider(self):
+        tool = _make_tool("slack_send", "Send.", "slack", service="messages")
+        assert _skill_key(tool) == "slack"
+
+    def test_google_falls_back_to_provider(self):
+        tool = _make_tool("google_tool", "Do.", "google")
+        # service defaults to "test" in _make_tool, so it returns "test"
+        # But if service is missing, should fall back to provider
+        tool["metadata"]["service"] = ""
+        assert _skill_key(tool) == ""
+        # With no service key at all, falls back to provider
+        del tool["metadata"]["service"]
+        assert _skill_key(tool) == "google"
+
+
+class TestSkillDisplayName:
+    def test_service_display_name(self):
+        assert _skill_display_name("gmail") == "Gmail"
+        assert _skill_display_name("calendar") == "Google Calendar"
+        assert _skill_display_name("drive") == "Google Drive"
+
+    def test_provider_display_name(self):
+        assert _skill_display_name("slack") == "Slack"
+        assert _skill_display_name("hubspot") == "HubSpot"
+
+    def test_unknown_key(self):
+        assert _skill_display_name("some_thing") == "Some Thing"
+
+
+class TestGenerateSkillFiles:
+    def test_single_provider(self):
+        tools = [_make_tool("slack_send", "Send a message.", "slack", service="messages")]
+        files = generate_skill_files(tools)
+        assert "supy-cloud-slack" in files
+        assert len(files) == 1
+
+    def test_google_split_by_service(self):
+        tools = [
+            _make_tool("gmail_send", "Send email.", "google", service="gmail"),
+            _make_tool("calendar_list", "List events.", "google", service="calendar"),
+        ]
+        files = generate_skill_files(tools)
+        assert "supy-cloud-gmail" in files
+        assert "supy-cloud-calendar" in files
+        assert len(files) == 2
+
+    def test_non_google_grouped_by_provider(self):
+        tools = [
+            _make_tool("slack_send", "Send.", "slack", service="messages"),
+            _make_tool("slack_list_channels", "List channels.", "slack", service="channels"),
+        ]
+        files = generate_skill_files(tools)
+        assert "supy-cloud-slack" in files
+        assert len(files) == 1
+        # Both tools should be in the same file
+        assert "slack_send" in files["supy-cloud-slack"]
+        assert "slack_list_channels" in files["supy-cloud-slack"]
+
+    def test_each_file_self_contained(self):
+        tools = [
+            _make_tool("slack_send", "Send.", "slack", service="messages"),
+            _make_tool("gmail_send", "Send email.", "google", service="gmail"),
+        ]
+        files = generate_skill_files(tools)
+        for dir_name, content in files.items():
+            assert content.startswith("---\n"), f"{dir_name} missing frontmatter"
+            assert "name: supy-" in content, f"{dir_name} missing name field"
+            assert "description:" in content, f"{dir_name} missing description"
+            assert "supyagent service run" in content, f"{dir_name} missing execution instructions"
+            assert '"ok": true' in content, f"{dir_name} missing output format"
+
+    def test_dir_naming(self):
+        tools = [
+            _make_tool("linear_list", "List issues.", "linear", service="issues"),
+            _make_tool("gmail_send", "Send.", "google", service="gmail"),
+            _make_tool("drive_list", "List files.", "google", service="drive"),
+        ]
+        files = generate_skill_files(tools)
+        assert set(files.keys()) == {"supy-cloud-linear", "supy-cloud-gmail", "supy-cloud-drive"}
+
+    def test_frontmatter_name_matches_key(self):
+        tools = [_make_tool("slack_send", "Send.", "slack", service="messages")]
+        files = generate_skill_files(tools)
+        content = files["supy-cloud-slack"]
+        assert "name: supy-slack" in content
+
+    def test_display_name_in_header(self):
+        tools = [_make_tool("gmail_send", "Send.", "google", service="gmail")]
+        files = generate_skill_files(tools)
+        assert "# Gmail" in files["supy-cloud-gmail"]
+
+    def test_multiple_providers_sorted(self):
+        tools = [
+            _make_tool("slack_send", "Send.", "slack", service="messages"),
+            _make_tool("github_list", "List repos.", "github", service="repos"),
+        ]
+        files = generate_skill_files(tools)
+        keys = list(files.keys())
+        assert keys.index("supy-cloud-github") < keys.index("supy-cloud-slack")
+
+
 class TestGenerateSkillMd:
     def test_frontmatter(self):
         tools = [_make_tool("slack_send_message", "Send a message.", "slack")]
         md = generate_skill_md(tools)
         assert md.startswith("---\n")
-        assert "name: supy" in md
+        assert "name: supy-" in md
         assert "description:" in md
         assert "Slack" in md
 
@@ -133,12 +253,14 @@ class TestGenerateSkillMd:
                 "slack_send_message",
                 "Send a message to a Slack channel.",
                 "slack",
-                properties={"channel": {"type": "string", "description": "Channel ID"}, "text": {"type": "string", "description": "Message"}},
+                properties={
+                    "channel": {"type": "string", "description": "Channel ID"},
+                    "text": {"type": "string", "description": "Message"},
+                },
                 required=["channel", "text"],
             )
         ]
         md = generate_skill_md(tools)
-        assert "## Slack" in md
         assert "### slack_send_message" in md
         assert "| `channel` | string | yes |" in md
         assert "| `text` | string | yes |" in md
@@ -150,8 +272,8 @@ class TestGenerateSkillMd:
             _make_tool("github_list", "List repos.", "github"),
         ]
         md = generate_skill_md(tools)
-        github_pos = md.index("## GitHub")
-        slack_pos = md.index("## Slack")
+        github_pos = md.index("# GitHub")
+        slack_pos = md.index("# Slack")
         assert github_pos < slack_pos  # alphabetical
 
     def test_empty_parameters(self):

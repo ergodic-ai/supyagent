@@ -110,18 +110,24 @@ class SessionManager:
                 return alias
         return None
 
-    def create_session(self, agent: str, model: str) -> Session:
+    def create_session(
+        self, agent: str, model: str, session_id: str | None = None
+    ) -> Session:
         """
         Create a new session for an agent.
 
         Args:
             agent: Agent name
             model: Model being used
+            session_id: Optional session ID to use (instead of auto-generating)
 
         Returns:
             The newly created session
         """
-        meta = SessionMeta(agent=agent, model=model)
+        kwargs: dict[str, Any] = {"agent": agent, "model": model}
+        if session_id:
+            kwargs["session_id"] = session_id
+        meta = SessionMeta(**kwargs)
         session = Session(meta=meta)
         self._save_session(session)
         self._set_current(agent, meta.session_id)

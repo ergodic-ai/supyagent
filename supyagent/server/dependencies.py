@@ -34,13 +34,6 @@ class AgentPool:
         session_id: str | None = None,
     ) -> Agent:
         """Get a cached agent or create a new one."""
-        config = load_agent_config(agent_name)
-
-        # Resolve session
-        session: Session | None = None
-        if session_id:
-            session = self._session_manager.load_session(agent_name, session_id)
-
         effective_session_id = session_id or "__new__"
         key = (agent_name, effective_session_id)
 
@@ -48,6 +41,19 @@ class AgentPool:
             if key in self._cache:
                 self._cache.move_to_end(key)
                 return self._cache[key]
+
+        config = load_agent_config(agent_name)
+
+        # Resolve session: load from disk, or create with the provided ID
+        session: Session | None = None
+        if session_id:
+            session = self._session_manager.load_session(agent_name, session_id)
+            if session is None:
+                # Create a new session using the caller-provided ID so the
+                # file name matches future load_session() lookups.
+                session = self._session_manager.create_session(
+                    agent_name, config.model.provider, session_id=session_id
+                )
 
         # Create outside lock (agent init can be slow)
         agent = Agent(
@@ -57,12 +63,9 @@ class AgentPool:
             credential_manager=self._credential_manager,
         )
 
-        # Use real session_id as key
-        real_key = (agent_name, agent.session.meta.session_id)
-
         with self._lock:
-            self._cache[real_key] = agent
-            self._cache.move_to_end(real_key)
+            self._cache[key] = agent
+            self._cache.move_to_end(key)
             while len(self._cache) > self._max_size:
                 evicted_key, _ = self._cache.popitem(last=False)
                 self._agent_locks.pop(evicted_key, None)

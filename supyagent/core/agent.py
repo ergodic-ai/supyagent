@@ -361,6 +361,11 @@ class Agent(BaseAgentEngine):
                         self.memory_mgr.mark_pending(recent)
                     self.memory_mgr.flush_pending(self.session.meta.session_id)
             elif event_type == "done":
+                # Yield the done event FIRST so the stream finishes immediately,
+                # then run post-message tasks (memory, summarization) which may
+                # involve slow LLM calls.
+                yield (event_type, data)
+
                 # Memory: check for signals in the final exchange
                 if self.memory_mgr and self.config.memory.auto_extract:
                     recent = self.messages[-2:]
@@ -368,7 +373,6 @@ class Agent(BaseAgentEngine):
                         self.memory_mgr.mark_pending(recent)
                     self.memory_mgr.flush_pending(self.session.meta.session_id)
                 self._check_and_summarize()
-                yield (event_type, data)
             else:
                 # Pass through: text, reasoning, tool_start, tool_end
                 yield (event_type, data)

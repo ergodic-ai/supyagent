@@ -84,19 +84,18 @@ async def agent_to_aisdk_stream(
                 yield encoder.step_finish(finish_reason="tool-calls")
 
             elif event_type == "done":
-                pass  # handled below
+                # Emit finish events immediately so the client sees the
+                # response complete.  The background thread may continue
+                # with post-message work (summarization, memory flush) but
+                # the user-facing stream is done.
+                yield encoder.step_finish(finish_reason="stop")
+                yield encoder.message_finish(finish_reason="stop")
+                break  # Exit the polling loop; let thread finish in background
 
     except Exception as exc:
         yield encoder.error(str(exc))
         return
     finally:
-        thread.join(timeout=10)
-
-    # Check for errors from the consumer thread
-    if error_holder:
-        yield encoder.error(str(error_holder[0]))
-        return
-
-    # Emit final step finish and message finish
-    yield encoder.step_finish(finish_reason="stop")
-    yield encoder.message_finish(finish_reason="stop")
+        # Don't block the response on post-message work (auto-summarization
+        # can take 10-30s).  Detach — the daemon thread will finish on its own.
+        thread.join(timeout=0.5)
