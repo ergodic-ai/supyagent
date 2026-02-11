@@ -4,7 +4,7 @@ version: "1.0"
 type: interactive
 
 model:
-  provider: anthropic/claude-opus-4.6
+  provider: __MODEL_PLACEHOLDER__
   temperature: 0.7
   max_tokens: 8192
 

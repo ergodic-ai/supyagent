@@ -113,7 +113,7 @@ def _warn_model_provider(provider: str) -> None:
         )
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.version_option(version=_version, prog_name="supyagent")
 @click.option("--debug", is_flag=True, hidden=True, help="Enable debug logging")
 @click.pass_context
@@ -126,9 +126,10 @@ def cli(ctx: click.Context, debug: bool):
     Quick start:
 
     \b
+        supyagent                 # Chat with assistant (or run setup)
         supyagent hello           # Interactive setup wizard
-        supyagent new myagent     # Create an agent
-        supyagent chat myagent    # Start chatting
+        supyagent run "task"      # Run a task with the assistant
+        supyagent chat myagent    # Chat with a specific agent
     """
     ctx.ensure_object(dict)
     ctx.obj["debug"] = debug
@@ -144,6 +145,15 @@ def cli(ctx: click.Context, debug: bool):
         logging.getLogger("httpx").setLevel(logging.WARNING)
         logging.getLogger("httpcore").setLevel(logging.WARNING)
         logging.getLogger("litellm").setLevel(logging.INFO)
+
+    if ctx.invoked_subcommand is None:
+        # No subcommand — auto-route to chat or hello
+        from supyagent.core.workspace import is_workspace_initialized
+
+        if is_workspace_initialized():
+            ctx.invoke(chat, agent_name="assistant")
+        else:
+            ctx.invoke(hello)
 
 
 @cli.command()
@@ -490,7 +500,7 @@ def list_agents():
 
 
 @cli.command()
-@click.argument("agent_name")
+@click.argument("agent_name", default="assistant")
 @click.option("--new", "new_session", is_flag=True, help="Start a new session")
 @click.option("--session", "session_id", help="Resume a specific session by ID")
 @click.option(
@@ -509,7 +519,7 @@ def chat(
     """
     Start an interactive chat session with an agent.
 
-    AGENT_NAME is the name of the agent to chat with.
+    AGENT_NAME is the name of the agent to chat with (default: assistant).
 
     By default, resumes the most recent session. Use --new to start fresh,
     or --session <id> to resume a specific session.
@@ -534,7 +544,7 @@ def chat(
         sys.exit(1)
 
     # Warn about model provider issues early
-    _warn_model_provider(config.model.provider)
+    _warn_model_provider(config.model.resolve_provider())
 
     # Initialize session manager
     session_mgr = SessionManager()
@@ -2162,8 +2172,14 @@ def parse_secrets(secrets: tuple[str, ...]) -> dict[str, str]:
 
 
 @cli.command()
-@click.argument("agent_name")
 @click.argument("task", required=False)
+@click.option(
+    "--agent",
+    "-a",
+    "agent_name",
+    default="assistant",
+    help="Agent to run (default: assistant)",
+)
 @click.option(
     "--input",
     "-i",
@@ -2204,8 +2220,8 @@ def parse_secrets(secrets: tuple[str, ...]) -> dict[str, str]:
     help="Disable streaming (stream is on by default)",
 )
 def run(
-    agent_name: str,
     task: str | None,
+    agent_name: str,
     input_file: str | None,
     output_format: str,
     secrets: tuple[str, ...],
@@ -2216,16 +2232,16 @@ def run(
     """
     Run an agent in execution mode (non-interactive).
 
-    AGENT_NAME is the agent to run.
     TASK is the task description or JSON input (optional if using --input or stdin).
 
     \b
     Examples:
-        supyagent run summarizer "Summarize this text..."
-        supyagent run summarizer --input document.txt
-        supyagent run summarizer --input document.txt --output json
-        echo "text" | supyagent run summarizer
-        supyagent run api-caller '{"endpoint": "/users"}' --secrets API_KEY=xxx
+        supyagent run "Summarize this text..."
+        supyagent run "Summarize this text..." --agent summarizer
+        supyagent run --input document.txt
+        supyagent run --input document.txt --output json --agent summarizer
+        echo "text" | supyagent run
+        supyagent run '{"endpoint": "/users"}' --agent api-caller --secrets API_KEY=xxx
     """
     # Load global config (API keys) into environment
     load_config()
@@ -3567,6 +3583,155 @@ def config_export(file_path: str, force: bool):
 
 
 # =============================================================================
+# Models Commands
+# =============================================================================
+
+
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def models(ctx: click.Context):
+    """Manage registered LLM models and role assignments."""
+    if ctx.invoked_subcommand is None:
+        # Default: show model list
+        ctx.invoke(models_list)
+
+
+@models.command("list")
+def models_list():
+    """List registered models and role assignments."""
+    from supyagent.core.model_registry import get_model_registry
+
+    registry = get_model_registry()
+    data = registry.summary()
+
+    if not data["registered"]:
+        console.print("[dim]No models registered.[/dim]")
+        console.print()
+        console.print("Add a model: [cyan]supyagent models add anthropic/claude-sonnet-4-5[/cyan]")
+        return
+
+    from rich.table import Table
+
+    # Show default
+    if data["default"]:
+        console.print(f"  Default: [bold cyan]{data['default']}[/bold cyan]")
+        console.print()
+
+    # Show role assignments
+    if data["roles"]:
+        table = Table(title="Role Assignments", show_header=True, header_style="bold")
+        table.add_column("Role", style="cyan", width=14)
+        table.add_column("Model")
+        for role, model in sorted(data["roles"].items()):
+            table.add_row(role, model)
+        console.print(table)
+        console.print()
+
+    # Show all registered models
+    table = Table(title="Registered Models", show_header=True, header_style="bold")
+    table.add_column("Model", style="cyan")
+    table.add_column("Provider")
+    table.add_column("API Key")
+
+    for model_str in data["registered"]:
+        provider_name = registry.detect_provider_name(model_str) or "Unknown"
+        has_key = registry.check_api_key(model_str)
+        key_status = "[green]✓[/green]" if has_key else "[red]✗ missing[/red]"
+        table.add_row(model_str, provider_name, key_status)
+
+    console.print(table)
+
+
+@models.command("add")
+@click.argument("model_string")
+def models_add(model_string: str):
+    """
+    Register a model. Auto-detects provider and checks for API key.
+
+    \b
+    Examples:
+        supyagent models add anthropic/claude-sonnet-4-5
+        supyagent models add google/gemini-3-flash-preview
+        supyagent models add deepseek/deepseek-chat
+    """
+    from supyagent.core.model_registry import get_model_registry
+
+    registry = get_model_registry()
+
+    if registry.is_registered(model_string):
+        console.print(f"[yellow]Already registered:[/yellow] {model_string}")
+        return
+
+    # Auto-detect provider
+    provider_name = registry.detect_provider_name(model_string)
+    if provider_name:
+        console.print(f"  Provider: [cyan]{provider_name}[/cyan]")
+
+    # Check/prompt for API key
+    if not registry.check_api_key(model_string):
+        if not registry.ensure_api_key(model_string):
+            console.print("[yellow]No API key provided. Model registered but may not work.[/yellow]")
+
+    registry.add(model_string)
+    console.print(f"[green]✓[/green] Registered [cyan]{model_string}[/cyan]")
+
+    # If no default set, offer to make this the default
+    if not registry.get_default():
+        registry.set_default(model_string)
+        console.print("  Set as default (first registered model)")
+
+
+@models.command("remove")
+@click.argument("model_string")
+def models_remove(model_string: str):
+    """Unregister a model."""
+    from supyagent.core.model_registry import get_model_registry
+
+    registry = get_model_registry()
+    if registry.remove(model_string):
+        console.print(f"[green]✓[/green] Removed {model_string}")
+    else:
+        console.print(f"[yellow]Not registered:[/yellow] {model_string}")
+
+
+@models.command("default")
+@click.argument("model_string")
+def models_default(model_string: str):
+    """Set the default model."""
+    from supyagent.core.model_registry import get_model_registry
+
+    registry = get_model_registry()
+    registry.set_default(model_string)
+    console.print(f"[green]✓[/green] Default model: [cyan]{model_string}[/cyan]")
+
+
+@models.command("assign")
+@click.argument("role")
+@click.argument("model_string")
+def models_assign(role: str, model_string: str):
+    """
+    Assign a model to a role (e.g., fast, smart, reasoning, cheap).
+
+    \b
+    Examples:
+        supyagent models assign fast google/gemini-3-flash-preview
+        supyagent models assign smart anthropic/claude-sonnet-4-5
+        supyagent models assign reasoning anthropic/claude-opus-4-6
+    """
+    from supyagent.core.model_registry import get_model_registry
+
+    registry = get_model_registry()
+
+    # Auto-register if needed
+    if not registry.is_registered(model_string):
+        registry.add(model_string)
+        console.print(f"  Auto-registered [cyan]{model_string}[/cyan]")
+
+    registry.assign_role(role, model_string)
+    console.print(f"[green]✓[/green] Role [bold]{role}[/bold] → [cyan]{model_string}[/cyan]")
+
+
+# =============================================================================
 # Service Tool Commands (direct CLI access to cloud integrations)
 # =============================================================================
 
@@ -4048,32 +4213,41 @@ def skills_group():
 @click.option(
     "--output",
     "-o",
-    default=".claude/skills/",
-    help="Output directory (default: .claude/skills/)",
+    default=None,
+    help="Output directory. If omitted, detects AI tool folders interactively.",
 )
 @click.option(
     "--stdout",
     is_flag=True,
     help="Print to stdout instead of writing to files",
 )
-def skills_generate(output: str, stdout: bool):
+@click.option(
+    "--all",
+    "select_all",
+    is_flag=True,
+    help="Write skills to all detected AI tool folders without prompting.",
+)
+def skills_generate(output: str | None, stdout: bool, select_all: bool):
     """
-    Generate Claude Code skill files from connected integrations.
+    Generate skill files for AI coding assistants from connected integrations.
 
     Queries your connected service integrations and generates one skill
-    file per integration that teaches Claude Code how to use them via
-    supyagent CLI.
+    file per integration. Automatically detects AI tool folders (.claude,
+    .cursor, .agents, .copilot, .windsurf) and lets you choose which to
+    populate.
 
     \b
     Examples:
         supyagent skills generate
+        supyagent skills generate --all
         supyagent skills generate --stdout
         supyagent skills generate -o custom/path/
     """
     from supyagent.cli.skills import (
-        SKILL_FILE_PREFIX,
         generate_skill_files,
         generate_skill_md,
+        resolve_output_dirs,
+        write_skills_to_dir,
     )
     from supyagent.core.service import get_service_client
 
@@ -4100,39 +4274,22 @@ def skills_generate(output: str, stdout: bool):
         return
 
     skill_files = generate_skill_files(tools)
-    output_dir = Path(output)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dirs = resolve_output_dirs(output, select_all)
 
-    # Clean up stale managed skill directories and legacy files
-    import shutil
-
-    for existing in output_dir.iterdir():
-        if existing.is_dir() and (
-            existing.name.startswith(SKILL_FILE_PREFIX)
-            or existing.name.startswith("supy-")  # legacy prefix
-        ):
-            shutil.rmtree(existing)
-        elif existing.is_file() and (
-            existing.name == "supy.md"
-            or existing.name.startswith("supy-")  # legacy flat files
-        ):
-            existing.unlink()
-
-    # Write new skill directories with SKILL.md inside each
-    for dir_name, content in skill_files.items():
-        skill_dir = output_dir / dir_name
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / "SKILL.md").write_text(content)
+    for output_dir in output_dirs:
+        write_skills_to_dir(output_dir, skill_files)
 
     console_err.print(
         f"[green]\u2713[/green] Generated [cyan]{len(skill_files)}[/cyan] "
-        f"skills ({len(tools)} tools) in [cyan]{output_dir}[/cyan]"
+        f"skills ({len(tools)} tools) in [cyan]{len(output_dirs)}[/cyan] location(s)"
     )
-    for dir_name in sorted(skill_files.keys()):
-        console_err.print(f"  {dir_name}/SKILL.md")
+    for output_dir in output_dirs:
+        console_err.print(f"  [dim]{output_dir}/[/dim]")
+        for dir_name in sorted(skill_files.keys()):
+            console_err.print(f"    {dir_name}/SKILL.md")
     console_err.print()
     console_err.print(
-        "[dim]Claude Code will automatically use these skills when you ask "
+        "[dim]Your AI coding assistant will automatically use these skills when you ask "
         "about connected services.[/dim]"
     )
 

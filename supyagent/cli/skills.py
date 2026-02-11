@@ -1,12 +1,16 @@
 """
-Skills generation for Claude Code Agent Skills format.
+Skills generation for AI coding assistant skill files.
 
-Generates .claude/skills/supy-{key}/SKILL.md files from connected service integrations.
+Generates {tool_folder}/skills/supy-{key}/SKILL.md files from connected service integrations.
+Supports multiple AI tools: Claude Code, Cursor, Codex, Copilot, Windsurf.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
+import sys
+from pathlib import Path
 from typing import Any
 
 PROVIDER_DISPLAY_NAMES: dict[str, str] = {
@@ -39,6 +43,123 @@ SERVICE_DISPLAY_NAMES: dict[str, str] = {
 
 # Prefix for generated skill directories — used to identify managed files for cleanup.
 SKILL_FILE_PREFIX = "supy-cloud-"
+
+# Registry of AI coding tools and their skills folder conventions.
+AI_TOOL_FOLDERS: list[dict[str, str]] = [
+    {"name": "Claude Code", "detect": ".claude", "skills": ".claude/skills"},
+    {"name": "Cursor", "detect": ".cursor", "skills": ".cursor/skills"},
+    {"name": "Codex", "detect": ".agents", "skills": ".agents/skills"},
+    {"name": "Copilot", "detect": ".copilot", "skills": ".copilot/skills"},
+    {"name": "Windsurf", "detect": ".windsurf", "skills": ".windsurf/skills"},
+]
+
+
+def detect_ai_tool_folders(root: Path) -> list[dict[str, str]]:
+    """Return AI tool entries whose detection folder exists under root."""
+    return [entry for entry in AI_TOOL_FOLDERS if (root / entry["detect"]).is_dir()]
+
+
+def prompt_skill_output_dirs(
+    root: Path,
+    detected: list[dict[str, str]],
+) -> list[Path]:
+    """Interactive prompt for selecting which AI tool folders to populate with skills.
+
+    Shows detected folders with a default of 'all'. If none detected, prompts for a
+    custom path.
+
+    Returns:
+        List of absolute skills directory Paths.
+    """
+    from rich.console import Console
+    from rich.prompt import Prompt
+
+    console = Console(stderr=True)
+
+    if not detected:
+        console.print(
+            "[yellow]No AI tool folders detected[/yellow] "
+            "(.claude, .cursor, .agents, .copilot, .windsurf)"
+        )
+        custom = Prompt.ask("Enter skills output path", default=".claude/skills")
+        return [root / custom]
+
+    console.print()
+    console.print("[bold]Detected AI tool folders:[/bold]")
+    console.print()
+    for i, entry in enumerate(detected, 1):
+        console.print(f"  [cyan]{i}[/cyan]. {entry['name']}  [dim]({entry['skills']}/)[/dim]")
+    console.print()
+
+    choice = Prompt.ask(
+        "Select folders (comma-separated numbers, or 'a' for all)",
+        default="a",
+    )
+
+    if choice.strip().lower() == "a":
+        return [root / e["skills"] for e in detected]
+
+    indices = []
+    for part in choice.split(","):
+        part = part.strip()
+        if part.isdigit():
+            idx = int(part) - 1
+            if 0 <= idx < len(detected):
+                indices.append(idx)
+
+    if not indices:
+        console.print("[yellow]Invalid selection, defaulting to all.[/yellow]")
+        return [root / e["skills"] for e in detected]
+
+    return [root / detected[i]["skills"] for i in indices]
+
+
+def write_skills_to_dir(output_dir: Path, skill_files: dict[str, str]) -> None:
+    """Write skill files to a directory, cleaning up stale entries first."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for existing in output_dir.iterdir():
+        if existing.is_dir() and (
+            existing.name.startswith(SKILL_FILE_PREFIX)
+            or existing.name.startswith("supy-")  # legacy prefix
+        ):
+            shutil.rmtree(existing)
+        elif existing.is_file() and (
+            existing.name == "supy.md"
+            or existing.name.startswith("supy-")  # legacy flat files
+        ):
+            existing.unlink()
+    for dir_name, content in skill_files.items():
+        skill_dir = output_dir / dir_name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(content)
+
+
+def resolve_output_dirs(
+    output: str | None,
+    select_all: bool,
+    root: Path = Path("."),
+) -> list[Path]:
+    """Determine output directories based on CLI flags.
+
+    Args:
+        output: Explicit --output path, or None for auto-detection.
+        select_all: If True, write to all detected folders without prompting.
+        root: Project root directory to scan for AI tool folders.
+
+    Returns:
+        List of skills directory Paths to write to.
+    """
+    if output:
+        return [Path(output)]
+
+    detected = detect_ai_tool_folders(root)
+
+    if select_all or not sys.stdin.isatty():
+        if detected:
+            return [root / e["skills"] for e in detected]
+        return [root / ".claude/skills"]
+
+    return prompt_skill_output_dirs(root, detected)
 
 
 def _skill_key(tool: dict) -> str:

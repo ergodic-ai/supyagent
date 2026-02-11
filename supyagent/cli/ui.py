@@ -199,7 +199,7 @@ def create_chat_session(agent_name: str) -> PromptSession | None:
             history=FileHistory(str(history_file)),
             auto_suggest=AutoSuggestFromHistory(),
             enable_history_search=True,
-            complete_while_typing=False,
+            complete_while_typing=True,
             multiline=False,
         )
     except Exception:

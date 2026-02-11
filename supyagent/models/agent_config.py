@@ -17,7 +17,15 @@ logger = logging.getLogger(__name__)
 class ModelConfig(BaseModel):
     """LLM model configuration."""
 
-    provider: str = Field(..., description="LiteLLM model identifier (e.g., 'anthropic/claude-3-5-sonnet-20241022')")
+    provider: str = Field(
+        default="",
+        description="LiteLLM model identifier (e.g., 'anthropic/claude-3-5-sonnet-20241022')",
+    )
+    role: str | None = Field(
+        default=None,
+        description="Model role name (e.g., 'fast', 'smart', 'reasoning'). "
+        "Resolved via ModelRegistry at load time. Ignored if provider is set.",
+    )
     temperature: float = Field(default=0.7, ge=0, le=2)
     max_tokens: int | None = Field(default=None, description="Max response tokens (None = provider default, usually model max)")
     max_retries: int = Field(default=3, ge=0, description="Max retries on transient LLM errors")
@@ -31,6 +39,35 @@ class ModelConfig(BaseModel):
         default=True,
         description="Enable prompt caching when supported by the provider",
     )
+
+    def resolve_provider(self) -> str:
+        """
+        Resolve the effective model provider string.
+
+        Priority: explicit provider > role resolution > global default.
+        """
+        if self.provider:
+            return self.provider
+
+        if self.role:
+            try:
+                from supyagent.core.model_registry import get_model_registry
+                resolved = get_model_registry().resolve(self.role)
+                if resolved:
+                    return resolved
+            except Exception:
+                pass
+
+        # Fall back to global default
+        try:
+            from supyagent.core.model_registry import get_model_registry
+            default = get_model_registry().get_default()
+            if default:
+                return default
+        except Exception:
+            pass
+
+        return "anthropic/claude-sonnet-4-5-20250929"
 
 
 class ToolPermissions(BaseModel):
@@ -507,12 +544,16 @@ def get_full_system_prompt(
     has_service: bool = False,
     sandbox_context: str = "",
     is_daemon: bool = False,
+    goals_content: str = "",
 ) -> str:
     """
     Get the full system prompt, including tool creation instructions if enabled,
-    resilience instructions, cloud service awareness, and sandbox context.
+    resilience instructions, cloud service awareness, sandbox context, and
+    workspace goals.
     """
     prompt = config.system_prompt
+    if goals_content:
+        prompt += f"\n\n---\n\n## Workspace Goals\n\n{goals_content}"
     if is_daemon:
         prompt += DAEMON_INSTRUCTIONS
     if config.will_create_tools:

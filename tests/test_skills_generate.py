@@ -1,16 +1,20 @@
 """Tests for the skills generation module."""
 
 import json
+from pathlib import Path
 
 from supyagent.cli.skills import (
+    SKILL_FILE_PREFIX,
     _build_provider_descriptions,
     _extract_action,
     _generate_example_args,
     _placeholder_for_type,
     _skill_display_name,
     _skill_key,
+    detect_ai_tool_folders,
     generate_skill_files,
     generate_skill_md,
+    write_skills_to_dir,
 )
 
 
@@ -286,3 +290,75 @@ class TestGenerateSkillMd:
         md = generate_skill_md(tools)
         assert "supyagent service run <tool_name>" in md
         assert '"ok": true' in md
+
+
+class TestDetectAiToolFolders:
+    def test_detect_claude(self, tmp_path):
+        (tmp_path / ".claude").mkdir()
+        detected = detect_ai_tool_folders(tmp_path)
+        assert len(detected) == 1
+        assert detected[0]["name"] == "Claude Code"
+
+    def test_detect_multiple(self, tmp_path):
+        (tmp_path / ".claude").mkdir()
+        (tmp_path / ".cursor").mkdir()
+        detected = detect_ai_tool_folders(tmp_path)
+        assert len(detected) == 2
+        names = {e["name"] for e in detected}
+        assert names == {"Claude Code", "Cursor"}
+
+    def test_detect_none(self, tmp_path):
+        assert detect_ai_tool_folders(tmp_path) == []
+
+    def test_detect_all(self, tmp_path):
+        for folder in [".claude", ".cursor", ".agents", ".copilot", ".windsurf"]:
+            (tmp_path / folder).mkdir()
+        assert len(detect_ai_tool_folders(tmp_path)) == 5
+
+    def test_ignores_files(self, tmp_path):
+        """Files named like AI tool folders should not be detected."""
+        (tmp_path / ".claude").write_text("not a directory")
+        assert detect_ai_tool_folders(tmp_path) == []
+
+
+class TestWriteSkillsToDir:
+    def test_writes_skill_files(self, tmp_path):
+        files = {"supy-cloud-slack": "# Slack\ncontent"}
+        write_skills_to_dir(tmp_path, files)
+        assert (tmp_path / "supy-cloud-slack" / "SKILL.md").exists()
+        assert (tmp_path / "supy-cloud-slack" / "SKILL.md").read_text() == "# Slack\ncontent"
+
+    def test_cleans_stale_dirs(self, tmp_path):
+        (tmp_path / "supy-cloud-old").mkdir()
+        (tmp_path / "supy-cloud-old" / "SKILL.md").write_text("old")
+        files = {"supy-cloud-new": "# New"}
+        write_skills_to_dir(tmp_path, files)
+        assert not (tmp_path / "supy-cloud-old").exists()
+        assert (tmp_path / "supy-cloud-new" / "SKILL.md").exists()
+
+    def test_cleans_legacy_prefix(self, tmp_path):
+        (tmp_path / "supy-legacy").mkdir()
+        (tmp_path / "supy-legacy" / "SKILL.md").write_text("legacy")
+        write_skills_to_dir(tmp_path, {})
+        assert not (tmp_path / "supy-legacy").exists()
+
+    def test_cleans_legacy_flat_files(self, tmp_path):
+        (tmp_path / "supy.md").write_text("legacy")
+        (tmp_path / "supy-old.md").write_text("legacy")
+        write_skills_to_dir(tmp_path, {})
+        assert not (tmp_path / "supy.md").exists()
+        assert not (tmp_path / "supy-old.md").exists()
+
+    def test_preserves_unrelated_files(self, tmp_path):
+        (tmp_path / "unrelated.md").write_text("keep")
+        (tmp_path / "other-dir").mkdir()
+        files = {"supy-cloud-test": "# Test"}
+        write_skills_to_dir(tmp_path, files)
+        assert (tmp_path / "unrelated.md").exists()
+        assert (tmp_path / "other-dir").exists()
+
+    def test_creates_output_dir(self, tmp_path):
+        output = tmp_path / "nested" / "skills"
+        files = {"supy-cloud-test": "# Test"}
+        write_skills_to_dir(output, files)
+        assert (output / "supy-cloud-test" / "SKILL.md").exists()
