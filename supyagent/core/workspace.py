@@ -25,7 +25,7 @@ GOALS_TEMPLATE = """\
 {user_goals}
 
 ## Subgoals
-<!-- Managed by the assistant. The agent can append subgoals here but will never modify User Goals. -->
+<!-- Managed by the agent. Uses checkbox syntax: [ ] pending, [x] done, [~] skipped -->
 """
 
 
@@ -126,6 +126,39 @@ def read_goals(root: Path | None = None) -> str:
     if path.exists():
         return path.read_text()
     return ""
+
+
+def has_active_goals(root: Path | None = None) -> bool:
+    """
+    Check if GOALS.md contains actual user goals (not just the empty template).
+
+    Extracts the "## User Goals" section and checks whether it has any
+    non-comment, non-blank content beyond the default placeholder "- ".
+    """
+    content = read_goals(root)
+    if not content.strip():
+        return False
+
+    # Extract content between "## User Goals" and the next "##" heading
+    import re
+
+    match = re.search(
+        r"##\s*User Goals\s*\n(.*?)(?=\n##|\Z)", content, re.DOTALL
+    )
+    if not match:
+        return False
+
+    section = match.group(1)
+    # Strip HTML comments and blank lines
+    lines = []
+    for line in section.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("<!--") and not stripped.endswith("-->"):
+            lines.append(stripped)
+
+    # Check if there's meaningful content (not just "- ")
+    meaningful = [ln for ln in lines if ln != "-" and ln != "- "]
+    return len(meaningful) > 0
 
 
 def get_workspace_model(agent_name: str, root: Path | None = None) -> str | None:

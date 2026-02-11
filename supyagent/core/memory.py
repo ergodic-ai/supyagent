@@ -432,13 +432,16 @@ class MemoryManager:
 
     @staticmethod
     def _fts_escape(query: str) -> str:
-        """Escape a query for FTS5: quote each token."""
-        tokens = query.split()
+        """Escape a query for FTS5: extract alphanumeric tokens only."""
+        # Strip everything except letters, numbers, spaces
+        cleaned = re.sub(r"[^\w\s]", " ", query)
+        tokens = cleaned.split()
         if not tokens:
             return ""
-        # Quote each token to treat them as literal terms
-        escaped = " OR ".join(f'"{t}"' for t in tokens if t.strip())
-        return escaped
+        # Quote each token to treat as literal, connect with OR
+        # Drop single-character tokens (noise)
+        escaped = " OR ".join(f'"{t}"' for t in tokens if len(t) > 1)
+        return escaped or ""
 
     # ── Entity Resolution ───────────────────────────────────────────
 

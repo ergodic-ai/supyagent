@@ -27,10 +27,19 @@ class ModelConfig(BaseModel):
         "Resolved via ModelRegistry at load time. Ignored if provider is set.",
     )
     temperature: float = Field(default=0.7, ge=0, le=2)
-    max_tokens: int | None = Field(default=None, description="Max response tokens (None = provider default, usually model max)")
-    max_retries: int = Field(default=3, ge=0, description="Max retries on transient LLM errors")
-    retry_delay: float = Field(default=1.0, gt=0, description="Initial retry delay in seconds")
-    retry_backoff: float = Field(default=2.0, gt=1, description="Exponential backoff multiplier")
+    max_tokens: int | None = Field(
+        default=None,
+        description="Max response tokens (None = provider default, usually model max)",
+    )
+    max_retries: int = Field(
+        default=3, ge=0, description="Max retries on transient LLM errors"
+    )
+    retry_delay: float = Field(
+        default=1.0, gt=0, description="Initial retry delay in seconds"
+    )
+    retry_backoff: float = Field(
+        default=2.0, gt=1, description="Exponential backoff multiplier"
+    )
     fallback: list[str] = Field(
         default_factory=list,
         description="Fallback model identifiers tried in order when primary fails on transient errors",
@@ -52,6 +61,7 @@ class ModelConfig(BaseModel):
         if self.role:
             try:
                 from supyagent.core.model_registry import get_model_registry
+
                 resolved = get_model_registry().resolve(self.role)
                 if resolved:
                     return resolved
@@ -61,6 +71,7 @@ class ModelConfig(BaseModel):
         # Fall back to global default
         try:
             from supyagent.core.model_registry import get_model_registry
+
             default = get_model_registry().get_default()
             if default:
                 return default
@@ -73,7 +84,9 @@ class ModelConfig(BaseModel):
 class ToolPermissions(BaseModel):
     """Tool permission settings."""
 
-    allow: list[str] = Field(default_factory=list, description="Allowed tool patterns (e.g., 'web_search:*')")
+    allow: list[str] = Field(
+        default_factory=list, description="Allowed tool patterns (e.g., 'web_search:*')"
+    )
     deny: list[str] = Field(default_factory=list, description="Denied tool patterns")
 
 
@@ -81,7 +94,9 @@ class CredentialSpec(BaseModel):
     """Credential specification."""
 
     name: str = Field(..., description="Environment variable name")
-    description: str = Field(default="", description="Description of what this credential is for")
+    description: str = Field(
+        default="", description="Description of what this credential is for"
+    )
     required: bool = Field(default=False)
 
 
@@ -90,27 +105,25 @@ class ContextSettings(BaseModel):
 
     auto_summarize: bool = Field(
         default=True,
-        description="Automatically summarize when trigger thresholds are reached"
+        description="Automatically summarize when trigger thresholds are reached",
     )
 
     # Summarization triggers (whichever comes first)
     max_messages_before_summary: int = Field(
         default=30,
-        description="Trigger summarization after N messages (since last summary)"
+        description="Trigger summarization after N messages (since last summary)",
     )
     max_tokens_before_summary: int = Field(
-        default=128_000,
-        description="Trigger summarization when total tokens exceed K"
+        default=128_000, description="Trigger summarization when total tokens exceed K"
     )
 
     # Other settings
     min_recent_messages: int = Field(
         default=6,
-        description="Minimum recent messages to always include (never summarized)"
+        description="Minimum recent messages to always include (never summarized)",
     )
     response_reserve: int = Field(
-        default=4096,
-        description="Tokens to reserve for response"
+        default=4096, description="Tokens to reserve for response"
     )
 
 
@@ -120,7 +133,7 @@ class ToolExecutionSettings(BaseModel):
     timeout: float = Field(default=30, description="Seconds before auto-backgrounding")
     mode: Literal["sync", "background", "auto"] = Field(
         default="auto",
-        description="Execution mode: sync (wait), background (immediate return), auto (timeout-based)"
+        description="Execution mode: sync (wait), background (immediate return), auto (timeout-based)",
     )
 
 
@@ -130,49 +143,46 @@ class SupervisorSettings(BaseModel):
     # Default timeout before auto-backgrounding (seconds)
     default_timeout: float = Field(
         default=60,
-        description="Default seconds to wait before auto-backgrounding a tool"
+        description="Default seconds to wait before auto-backgrounding a tool",
     )
 
     # Behavior when timeout is reached
     on_timeout: Literal["background", "kill", "wait"] = Field(
         default="background",
-        description="Action when timeout reached: background (keep running), kill (terminate), wait (block forever)"
+        description="Action when timeout reached: background (keep running), kill (terminate), wait (block forever)",
     )
 
     # Max concurrent background processes
     max_background_processes: int = Field(
-        default=10,
-        description="Maximum number of concurrent background processes"
+        default=10, description="Maximum number of concurrent background processes"
     )
 
     # Patterns for tools that should always run in background
     force_background_patterns: list[str] = Field(
         default_factory=lambda: ["*__start_server*", "*__run_server*", "*__serve*"],
-        description="Glob patterns for tools that always run in background (e.g., servers)"
+        description="Glob patterns for tools that always run in background (e.g., servers)",
     )
 
     # Patterns for tools that should always run synchronously
     force_sync_patterns: list[str] = Field(
         default_factory=lambda: ["*__read_*", "*__list_*", "*__get_*"],
-        description="Glob patterns for tools that always wait for completion"
+        description="Glob patterns for tools that always wait for completion",
     )
 
     # Per-tool settings (overrides defaults)
     tool_settings: dict[str, ToolExecutionSettings] = Field(
         default_factory=dict,
-        description="Per-tool execution settings, keyed by tool name pattern"
+        description="Per-tool execution settings, keyed by tool name pattern",
     )
 
     # Default delegation execution mode
     default_delegation_mode: Literal["subprocess", "in_process"] = Field(
-        default="subprocess",
-        description="Default mode for delegating to child agents"
+        default="subprocess", description="Default mode for delegating to child agents"
     )
 
     # Delegation timeout
     delegation_timeout: float = Field(
-        default=600,
-        description="Default timeout for delegated agent tasks (seconds)"
+        default=600, description="Default timeout for delegated agent tasks (seconds)"
     )
 
     def resolve_tool_settings(self, tool_name: str) -> tuple[float, bool, bool]:
@@ -209,20 +219,16 @@ class DelegationConfig(BaseModel):
     """Configuration for how this agent delegates to others."""
 
     share_credentials: bool = Field(
-        default=True,
-        description="Share stored credentials with delegated agents"
+        default=True, description="Share stored credentials with delegated agents"
     )
     share_summary: bool = Field(
-        default=True,
-        description="Pass conversation summary to delegated agents"
+        default=True, description="Pass conversation summary to delegated agents"
     )
     default_mode: Literal["subprocess", "in_process"] = Field(
-        default="subprocess",
-        description="Default execution mode for delegated agents"
+        default="subprocess", description="Default execution mode for delegated agents"
     )
     default_timeout: int = Field(
-        default=300,
-        description="Default timeout in seconds for delegated agents"
+        default=300, description="Default timeout in seconds for delegated agents"
     )
 
 
@@ -230,20 +236,16 @@ class MemorySettings(BaseModel):
     """Long-term memory system settings."""
 
     enabled: bool = Field(
-        default=True,
-        description="Enable entity-graph memory across sessions"
+        default=True, description="Enable entity-graph memory across sessions"
     )
     extraction_threshold: int = Field(
-        default=5,
-        description="Extract memories every N signal-flagged exchanges"
+        default=5, description="Extract memories every N signal-flagged exchanges"
     )
     retrieval_limit: int = Field(
-        default=10,
-        description="Max memories to inject into context per turn"
+        default=10, description="Max memories to inject into context per turn"
     )
     auto_extract: bool = Field(
-        default=True,
-        description="Automatically extract memories from conversation"
+        default=True, description="Automatically extract memories from conversation"
     )
 
 
@@ -252,8 +254,7 @@ class MountConfig(BaseModel):
 
     host_path: str = Field(..., description="Absolute path on the host")
     container_path: str = Field(
-        default="",
-        description="Path inside the container (default: /mnt/{basename})"
+        default="", description="Path inside the container (default: /mnt/{basename})"
     )
     readonly: bool = Field(default=True, description="Mount as read-only")
 
@@ -263,39 +264,31 @@ class SandboxConfig(BaseModel):
 
     enabled: bool = Field(
         default=False,
-        description="Run tools inside a container (requires podman or docker)"
+        description="Run tools inside a container (requires podman or docker)",
     )
-    image: str = Field(
-        default="python:3.12-slim",
-        description="Container image to use"
-    )
+    image: str = Field(default="python:3.12-slim", description="Container image to use")
     runtime: Literal["auto", "podman", "docker"] = Field(
-        default="auto",
-        description="Container runtime: auto-detect, podman, or docker"
+        default="auto", description="Container runtime: auto-detect, podman, or docker"
     )
     extra_mounts: list[MountConfig] = Field(
-        default_factory=list,
-        description="Additional bind mounts into the container"
+        default_factory=list, description="Additional bind mounts into the container"
     )
     env: dict[str, str] = Field(
         default_factory=dict,
-        description="Extra environment variables inside the container"
+        description="Extra environment variables inside the container",
     )
     network: Literal["none", "host", "bridge"] = Field(
-        default="bridge",
-        description="Container network mode"
+        default="bridge", description="Container network mode"
     )
     memory_limit: str = Field(
-        default="2g",
-        description="Container memory limit (e.g., '2g', '512m')"
+        default="2g", description="Container memory limit (e.g., '2g', '512m')"
     )
     allow_shell: bool = Field(
-        default=True,
-        description="Allow shell/exec tool execution inside sandbox"
+        default=True, description="Allow shell/exec tool execution inside sandbox"
     )
     setup_commands: list[str] = Field(
         default_factory=list,
-        description="Commands to run inside container after creation (e.g., 'pip install pandas')"
+        description="Commands to run inside container after creation (e.g., 'pip install pandas')",
     )
 
 
@@ -304,11 +297,10 @@ class ServiceConfig(BaseModel):
 
     enabled: bool = Field(
         default=True,
-        description="Use service tools when connected (auto-use if API key exists)"
+        description="Use service tools when connected (auto-use if API key exists)",
     )
     url: str = Field(
-        default="https://app.supyagent.com",
-        description="Service base URL"
+        default="https://app.supyagent.com", description="Service base URL"
     )
 
 
@@ -316,17 +308,14 @@ class ScheduleConfig(BaseModel):
     """Daemon schedule configuration."""
 
     interval: str = Field(
-        default="5m",
-        description="Poll interval (e.g., '30s', '5m', '1h')"
+        default="5m", description="Poll interval (e.g., '30s', '5m', '1h')"
     )
     max_events_per_cycle: int = Field(
-        default=10,
-        ge=1,
-        description="Maximum inbox events to process per cycle"
+        default=10, ge=1, description="Maximum inbox events to process per cycle"
     )
     prompt: str | None = Field(
         default=None,
-        description="Optional scheduled task to run each cycle even with no events"
+        description="Optional scheduled task to run each cycle even with no events",
     )
 
 
@@ -347,19 +336,19 @@ class AgentConfig(BaseModel):
     limits: dict = Field(default_factory=dict)
     will_create_tools: bool = Field(
         default=False,
-        description="If true, agent will be instructed how to create new supypowers tools"
+        description="If true, agent will be instructed how to create new supypowers tools",
     )
     context: ContextSettings = Field(
         default_factory=ContextSettings,
-        description="Context window management settings"
+        description="Context window management settings",
     )
     supervisor: SupervisorSettings = Field(
         default_factory=SupervisorSettings,
-        description="Process supervisor settings for tool and agent execution"
+        description="Process supervisor settings for tool and agent execution",
     )
     delegation: DelegationConfig = Field(
         default_factory=DelegationConfig,
-        description="Settings for agent-to-agent delegation"
+        description="Settings for agent-to-agent delegation",
     )
     workspace: str | None = Field(
         default=None,
@@ -370,16 +359,15 @@ class AgentConfig(BaseModel):
         description="Container sandbox settings for isolated tool execution",
     )
     memory: MemorySettings = Field(
-        default_factory=MemorySettings,
-        description="Long-term memory system settings"
+        default_factory=MemorySettings, description="Long-term memory system settings"
     )
     service: ServiceConfig = Field(
         default_factory=ServiceConfig,
-        description="Service integration settings for third-party tools"
+        description="Service integration settings for third-party tools",
     )
     schedule: ScheduleConfig = Field(
         default_factory=ScheduleConfig,
-        description="Daemon schedule settings (only used when type=daemon)"
+        description="Daemon schedule settings (only used when type=daemon)",
     )
 
 
@@ -520,6 +508,45 @@ Key behaviors:
 - If an event cannot be processed, note the issue and archive it anyway
 """
 
+GOAL_DRIVEN_INSTRUCTIONS = """
+
+---
+
+## Goal-Driven Execution
+
+You are running in goal-driven mode. GOALS.md is your primary mission document.
+
+### Core Behavior
+- Your objective is to make concrete progress toward the goals defined in GOALS.md
+- Work autonomously: plan what needs to happen, execute it, then move to the next step
+- Do NOT stop after completing one action — keep working until all goals are met or you are genuinely blocked
+- When you reach a point where you cannot make further progress (missing access, unclear requirements, external dependency), explain what is blocking you and stop
+
+### Working with GOALS.md
+- Read GOALS.md at the start to understand your mission
+- As you work, update the "## Subgoals" section to track your progress:
+  - Add new subgoals you discover (prefix with `- [ ] `)
+  - Mark completed subgoals (change `- [ ] ` to `- [x] `)
+  - Add notes about blockers or discoveries
+- NEVER modify the "## User Goals" section — that is the user's intent
+- The Subgoals section is your working scratchpad — use it to plan, track, and communicate
+
+### Execution Discipline
+- Before starting work, break the user goals into concrete subgoals and write them to GOALS.md
+- Work through subgoals methodically — complete one before starting the next
+- After completing a significant piece of work, re-read GOALS.md to stay on track
+- If a subgoal turns out to be unnecessary or wrong, mark it with `- [~] ` (skipped) and note why
+- Prefer depth over breadth — finish what you start before moving on
+
+### When to Stop
+- All user goals have been achieved (or all achievable subgoals are complete)
+- You are blocked by something outside your control (missing credentials, unclear requirements, etc.)
+- You have exhausted your approaches for a stuck problem after 3 attempts
+- Before stopping, consider whether there is a way to continue making progress in an unsupervised way, without relying on the user to provide more instructions.
+- When stopping, write a clear summary of what was accomplished and what remains
+"""
+
+
 THINKING_GUIDELINES = """
 
 ---
@@ -544,6 +571,7 @@ def get_full_system_prompt(
     has_service: bool = False,
     sandbox_context: str = "",
     is_daemon: bool = False,
+    is_goal_driven: bool = False,
     goals_content: str = "",
 ) -> str:
     """
@@ -554,6 +582,8 @@ def get_full_system_prompt(
     prompt = config.system_prompt
     if goals_content:
         prompt += f"\n\n---\n\n## Workspace Goals\n\n{goals_content}"
+    if is_goal_driven:
+        prompt += GOAL_DRIVEN_INSTRUCTIONS
     if is_daemon:
         prompt += DAEMON_INSTRUCTIONS
     if config.will_create_tools:
@@ -658,7 +688,11 @@ def validate_agent_config(
     for delegate in config.delegates:
         delegate_path = agents_dir / f"{delegate}.yaml"
         if not delegate_path.exists():
-            available = [f.stem for f in agents_dir.glob("*.yaml")] if agents_dir.exists() else []
+            available = (
+                [f.stem for f in agents_dir.glob("*.yaml")]
+                if agents_dir.exists()
+                else []
+            )
             hint = f" Available: {', '.join(available)}" if available else ""
             issues.append(f"delegates: '{delegate}' not found in {agents_dir}/.{hint}")
 

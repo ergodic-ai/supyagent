@@ -227,6 +227,7 @@ class BaseAgentEngine(ABC):
             "has_service": self._service_client is not None,
             "sandbox_context": create_sandbox_context_prompt(self.config, self.sandbox_mgr),
             "goals_content": read_goals(),
+            "is_goal_driven": getattr(self, "_goal_driven", False),
         }
 
     def _build_messages_for_llm(self) -> list[dict[str, Any]]:

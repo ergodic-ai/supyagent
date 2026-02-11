@@ -160,11 +160,30 @@ def cli(ctx: click.Context, debug: bool):
 @click.option(
     "--quick", "-q", is_flag=True, help="Non-interactive setup with sensible defaults"
 )
-def hello(quick: bool):
+@click.option(
+    "--cli", "use_cli", is_flag=True, help="Use terminal UI instead of browser dashboard"
+)
+def hello(quick: bool, use_cli: bool):
     """Interactive setup wizard -- the best way to get started."""
-    from supyagent.cli.hello import run_hello_wizard
+    if use_cli or quick:
+        from supyagent.cli.hello import run_hello_wizard
 
-    run_hello_wizard(quick=quick)
+        run_hello_wizard(quick=quick)
+    else:
+        try:
+            from supyagent.server.ui.launcher import UILauncher
+
+            launcher = UILauncher("hello")
+            launcher.run()
+        except ImportError:
+            console.print(
+                "[yellow]Browser UI requires serve extras.[/yellow] "
+                "Install with: [cyan]pip install supyagent[serve][/cyan]\n"
+                "Falling back to terminal wizard...\n"
+            )
+            from supyagent.cli.hello import run_hello_wizard
+
+            run_hello_wizard(quick=False)
 
 
 # Register 'setup' as an alias for 'hello'
@@ -2370,6 +2389,199 @@ def run(
 
 
 @cli.command()
+@click.argument("task", required=False)
+@click.option(
+    "--agent",
+    "-a",
+    "agent_name",
+    default="assistant",
+    help="Agent to use (default: assistant)",
+)
+@click.option(
+    "--interval",
+    "-i",
+    default="1h",
+    help="Cycle interval (e.g., '5m', '1h', '30s')",
+)
+@click.option(
+    "--secrets",
+    "-s",
+    multiple=True,
+    help="Secrets as KEY=VALUE or path to .env file",
+)
+@click.option("--quiet", "-q", is_flag=True, help="Minimal output")
+@click.option("--verbose", "-v", is_flag=True, help="Show tool calls and reasoning")
+@click.option("--no-stream", "no_stream", is_flag=True, help="Disable streaming")
+@click.option("--max-cycles", default=0, help="Max cycles before stopping (0 = unlimited)")
+def live(
+    task: str | None,
+    agent_name: str,
+    interval: str,
+    secrets: tuple[str, ...],
+    quiet: bool,
+    verbose: bool,
+    no_stream: bool,
+    max_cycles: int,
+):
+    """
+    Run an agent continuously toward workspace goals.
+
+    Requires a GOALS.md file with active goals in the workspace. Each cycle
+    creates a fresh execution runner in goal-driven mode. TASK is optional —
+    if provided, it becomes the "immediate focus" for each cycle.
+
+    \b
+    Examples:
+        supyagent live
+        supyagent live "focus on the API refactor"
+        supyagent live --interval 5m --max-cycles 3
+        supyagent live --agent planner --interval 30m
+    """
+    import signal
+    import time
+
+    from supyagent.core.daemon import parse_interval
+    from supyagent.core.workspace import has_active_goals
+
+    load_config()
+
+    # Load agent config
+    try:
+        config = load_agent_config(agent_name)
+    except (AgentNotFoundError, AgentConfigError) as e:
+        console_err.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    # Parse and validate interval
+    try:
+        interval_seconds = parse_interval(interval)
+    except ValueError as e:
+        console_err.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    # Check for active goals
+    if not has_active_goals():
+        console_err.print(
+            "[red]Error:[/red] No active goals found. "
+            "Create a GOALS.md file with active goals first."
+        )
+        sys.exit(1)
+
+    secrets_dict = parse_secrets(secrets)
+
+    # Graceful shutdown
+    shutdown = False
+
+    def _handle_shutdown(signum, frame):
+        nonlocal shutdown
+        if not quiet:
+            console_err.print("\n[yellow]Shutting down after current cycle...[/yellow]")
+        shutdown = True
+
+    signal.signal(signal.SIGINT, _handle_shutdown)
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+
+    if not quiet:
+        cycle_label = f"max {max_cycles}" if max_cycles > 0 else "unlimited"
+        console_err.print(
+            f"[bold]Live mode:[/bold] {agent_name} "
+            f"(every {interval}, {cycle_label} cycles)"
+        )
+        if task:
+            console_err.print(f"[dim]Focus: {task}[/dim]")
+        console_err.print("[dim]Press Ctrl+C to stop[/dim]\n")
+
+    cycle = 0
+    while not shutdown:
+        cycle += 1
+        cycle_start = time.monotonic()
+
+        if not quiet:
+            console_err.print(f"[cyan][{_now()}][/cyan] Cycle {cycle} starting...")
+
+        # Create a fresh runner each cycle
+        runner = ExecutionRunner(config)
+        runner._goal_driven = True
+
+        # Build the goal-driven user message
+        user_content = runner._format_goal_driven_message(task or "")
+
+        # Progress callback
+        progress_state = {"in_reasoning": False}
+        live_renderer = StreamingMarkdownRenderer(
+            console, use_live=(not no_stream and sys.stdout.isatty())
+        )
+
+        def on_progress(event_type: str, data: dict):
+            if event_type == "tool_start" and not quiet:
+                if progress_state["in_reasoning"]:
+                    click.echo("")
+                    progress_state["in_reasoning"] = False
+                if live_renderer.has_content():
+                    live_renderer.flush_raw()
+                render_tool_start(console_err, data.get("name", "unknown"), data.get("arguments"))
+            elif event_type == "tool_end" and not quiet:
+                render_tool_end(console_err, data.get("result", {}))
+            elif event_type == "reasoning" and verbose:
+                if not progress_state["in_reasoning"]:
+                    render_reasoning(console_err, data.get("content", ""), is_first=True)
+                    progress_state["in_reasoning"] = True
+                else:
+                    render_reasoning(console_err, data.get("content", ""), is_first=False)
+            elif event_type == "streaming" and not no_stream:
+                if progress_state["in_reasoning"]:
+                    click.echo("")
+                    progress_state["in_reasoning"] = False
+                live_renderer.feed(data.get("content", ""))
+
+        use_stream = not no_stream
+
+        result = runner.run(
+            user_content,
+            secrets=secrets_dict,
+            on_progress=on_progress if (verbose or use_stream) else None,
+            stream=use_stream,
+        )
+
+        # Finalize streaming renderer
+        if use_stream and live_renderer.has_content():
+            live_renderer.finish()
+
+        elapsed = time.monotonic() - cycle_start
+        if not quiet:
+            status = "[green]OK[/green]" if result["ok"] else f"[red]Error: {result.get('error', '?')}[/red]"
+            console_err.print(
+                f"[cyan][{_now()}][/cyan] Cycle {cycle} done in {elapsed:.1f}s — {status}\n"
+            )
+
+        # Check max cycles
+        if max_cycles > 0 and cycle >= max_cycles:
+            if not quiet:
+                console_err.print(f"[dim]Reached max cycles ({max_cycles}). Stopping.[/dim]")
+            break
+
+        if shutdown:
+            break
+
+        # Wall-clock sleep: interval minus elapsed
+        sleep_time = max(0.0, interval_seconds - elapsed)
+        if sleep_time > 0:
+            if not quiet:
+                console_err.print(
+                    f"[dim]Sleeping {sleep_time:.0f}s until next cycle...[/dim]"
+                )
+            # Sleep in small increments to check shutdown flag
+            slept = 0.0
+            while slept < sleep_time and not shutdown:
+                chunk = min(1.0, sleep_time - slept)
+                time.sleep(chunk)
+                slept += chunk
+
+    if not quiet:
+        console_err.print(f"[green]Live mode stopped after {cycle} cycle(s).[/green]")
+
+
+@cli.command()
 @click.argument("agent_name")
 @click.option(
     "--secrets",
@@ -2752,12 +2964,25 @@ def batch(
 
 
 @cli.group(invoke_without_command=True)
+@click.option("--cli", "use_cli", is_flag=True, help="Use terminal UI instead of browser dashboard")
 @click.pass_context
-def agents(ctx):
-    """List agent instances or inspect agent configuration."""
+def agents(ctx, use_cli: bool):
+    """Agent dashboard — view and manage agent instances."""
     if ctx.invoked_subcommand is None:
-        # Default: list instances (backward compatible)
-        _agents_list()
+        if use_cli:
+            _agents_list()
+        else:
+            try:
+                from supyagent.server.ui.launcher import UILauncher
+
+                launcher = UILauncher("agents")
+                launcher.run()
+            except ImportError:
+                console.print(
+                    "[yellow]Browser UI requires serve extras.[/yellow]\n"
+                    "Falling back to console view...\n"
+                )
+                _agents_list()
 
 
 def _agents_list():
@@ -3588,12 +3813,28 @@ def config_export(file_path: str, force: bool):
 
 
 @cli.group(invoke_without_command=True)
+@click.option(
+    "--cli", "use_cli", is_flag=True, help="Use terminal UI instead of browser dashboard"
+)
 @click.pass_context
-def models(ctx: click.Context):
+def models(ctx: click.Context, use_cli: bool):
     """Manage registered LLM models and role assignments."""
     if ctx.invoked_subcommand is None:
-        # Default: show model list
-        ctx.invoke(models_list)
+        if use_cli:
+            ctx.invoke(models_list)
+        else:
+            try:
+                from supyagent.server.ui.launcher import UILauncher
+
+                launcher = UILauncher("models")
+                launcher.run()
+            except ImportError:
+                console.print(
+                    "[yellow]Browser UI requires serve extras.[/yellow] "
+                    "Install with: [cyan]pip install supyagent[serve][/cyan]\n"
+                    "Falling back to console view...\n"
+                )
+                ctx.invoke(models_list)
 
 
 @models.command("list")

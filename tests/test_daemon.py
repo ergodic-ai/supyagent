@@ -27,6 +27,7 @@ from supyagent.models.agent_config import (
 
 _PATCH_DISCOVER = "supyagent.core.engine.discover_tools"
 _PATCH_SERVICE = "supyagent.core.service.get_service_client"
+_PATCH_HAS_GOALS = "supyagent.core.workspace.has_active_goals"
 
 
 def _make_config(
@@ -156,9 +157,10 @@ class TestDaemonConfig:
 # ── DaemonRunner init ────────────────────────────────────────────────
 
 
+@patch(_PATCH_HAS_GOALS, return_value=False)
 @patch(_PATCH_DISCOVER, return_value=[])
 class TestDaemonRunnerInit:
-    def test_init_with_service(self, mock_discover):
+    def test_init_with_service(self, mock_discover, mock_goals):
         config = _make_config()
         with patch(_PATCH_SERVICE, return_value=_mock_service_client()):
             runner = DaemonRunner(config)
@@ -168,12 +170,12 @@ class TestDaemonRunnerInit:
         assert runner._cycle_count == 0
         assert not runner._shutdown_event.is_set()
 
-    def test_init_without_service_raises(self, mock_discover):
+    def test_init_without_service_raises(self, mock_discover, mock_goals):
         config = _make_config(service_enabled=False)
         with pytest.raises(DaemonConfigError, match="service connection"):
             DaemonRunner(config)
 
-    def test_init_with_memory(self, mock_discover):
+    def test_init_with_memory(self, mock_discover, mock_goals):
         config = _make_config(memory_enabled=True)
         with (
             patch(_PATCH_SERVICE, return_value=_mock_service_client()),
@@ -185,7 +187,7 @@ class TestDaemonRunnerInit:
         assert runner.memory_mgr is not None
         mock_memory.assert_called_once()
 
-    def test_tools_exclude_credential_tool(self, mock_discover):
+    def test_tools_exclude_credential_tool(self, mock_discover, mock_goals):
         config = _make_config()
         with patch(_PATCH_SERVICE, return_value=_mock_service_client()):
             runner = DaemonRunner(config)
@@ -193,7 +195,7 @@ class TestDaemonRunnerInit:
         tool_names = [t.get("function", {}).get("name", "") for t in runner.tools]
         assert "request_credential" not in tool_names
 
-    def test_tools_include_memory_tools_when_enabled(self, mock_discover):
+    def test_tools_include_memory_tools_when_enabled(self, mock_discover, mock_goals):
         config = _make_config(memory_enabled=True)
         with (
             patch(_PATCH_SERVICE, return_value=_mock_service_client()),
@@ -206,14 +208,14 @@ class TestDaemonRunnerInit:
         assert "memory_search" in tool_names
         assert "memory_write" in tool_names
 
-    def test_custom_interval(self, mock_discover):
+    def test_custom_interval(self, mock_discover, mock_goals):
         config = _make_config(schedule_kwargs={"interval": "30s"})
         with patch(_PATCH_SERVICE, return_value=_mock_service_client()):
             runner = DaemonRunner(config)
 
         assert runner._interval_seconds == 30.0
 
-    def test_credential_request_rejected(self, mock_discover):
+    def test_credential_request_rejected(self, mock_discover, mock_goals):
         config = _make_config()
         with patch(_PATCH_SERVICE, return_value=_mock_service_client()):
             runner = DaemonRunner(config)
@@ -230,6 +232,7 @@ class TestDaemonRunnerInit:
 # ── Cycle prompt construction ────────────────────────────────────────
 
 
+@patch(_PATCH_HAS_GOALS, return_value=False)
 @patch(_PATCH_DISCOVER, return_value=[])
 class TestDaemonCyclePrompt:
     def _make_runner(self, **kwargs):
@@ -237,7 +240,7 @@ class TestDaemonCyclePrompt:
         with patch(_PATCH_SERVICE, return_value=_mock_service_client()):
             return DaemonRunner(config)
 
-    def test_prompt_with_events(self, mock_discover):
+    def test_prompt_with_events(self, mock_discover, mock_goals):
         runner = self._make_runner()
         events = _sample_events(2)
         prompt = runner._build_cycle_prompt(events)
@@ -249,18 +252,18 @@ class TestDaemonCyclePrompt:
         assert "Hello 0" in prompt
         assert "Archive" in prompt or "archive" in prompt
 
-    def test_prompt_with_no_events_no_schedule(self, mock_discover):
+    def test_prompt_with_no_events_no_schedule(self, mock_discover, mock_goals):
         runner = self._make_runner()
         prompt = runner._build_cycle_prompt([])
         assert prompt == ""
 
-    def test_prompt_with_scheduled_prompt_only(self, mock_discover):
+    def test_prompt_with_scheduled_prompt_only(self, mock_discover, mock_goals):
         runner = self._make_runner(schedule_kwargs={"prompt": "Check pending tasks"})
         prompt = runner._build_cycle_prompt([])
         assert "Check pending tasks" in prompt
         assert "inbox event" not in prompt
 
-    def test_prompt_with_events_and_scheduled_prompt(self, mock_discover):
+    def test_prompt_with_events_and_scheduled_prompt(self, mock_discover, mock_goals):
         runner = self._make_runner(schedule_kwargs={"prompt": "Also check deployments"})
         events = _sample_events(1)
         prompt = runner._build_cycle_prompt(events)
@@ -269,7 +272,7 @@ class TestDaemonCyclePrompt:
         assert "Also check deployments" in prompt
         assert "Additionally" in prompt
 
-    def test_prompt_includes_event_data(self, mock_discover):
+    def test_prompt_includes_event_data(self, mock_discover, mock_goals):
         runner = self._make_runner()
         events = [{"id": "e1", "provider": "github", "event_type": "pr_review",
                     "created_at": "2025-01-01", "data": {"pr": 42, "action": "approved"}}]
@@ -279,7 +282,7 @@ class TestDaemonCyclePrompt:
         assert "pr_review" in prompt
         assert '"pr": 42' in prompt
 
-    def test_prompt_includes_summary(self, mock_discover):
+    def test_prompt_includes_summary(self, mock_discover, mock_goals):
         runner = self._make_runner()
         events = [{"id": "e1", "provider": "slack", "event_type": "message",
                     "created_at": "2025-01-01", "summary": "Alice asked about deployment"}]
@@ -290,6 +293,7 @@ class TestDaemonCyclePrompt:
 # ── run_once ─────────────────────────────────────────────────────────
 
 
+@patch(_PATCH_HAS_GOALS, return_value=False)
 @patch(_PATCH_DISCOVER, return_value=[])
 class TestDaemonRunOnce:
     def _make_runner(self, inbox_events=None, **kwargs):
@@ -299,7 +303,7 @@ class TestDaemonRunOnce:
             runner = DaemonRunner(config)
         return runner
 
-    def test_skip_when_no_events(self, mock_discover):
+    def test_skip_when_no_events(self, mock_discover, mock_goals):
         runner = self._make_runner(inbox_events=[])
         result = runner.run_once()
 
@@ -308,7 +312,7 @@ class TestDaemonRunOnce:
         assert result.cycle == 0  # cycle count not incremented on skip
         assert result.elapsed_seconds >= 0
 
-    def test_cycle_with_events(self, mock_discover):
+    def test_cycle_with_events(self, mock_discover, mock_goals):
         runner = self._make_runner(inbox_events=_sample_events(2))
 
         with patch.object(runner, "_run_loop", return_value="Processed 2 events"):
@@ -321,7 +325,7 @@ class TestDaemonRunOnce:
         assert result.response == "Processed 2 events"
         assert result.error is None
 
-    def test_cycle_increments(self, mock_discover):
+    def test_cycle_increments(self, mock_discover, mock_goals):
         runner = self._make_runner(inbox_events=_sample_events(1))
 
         with patch.object(runner, "_run_loop", return_value="done"):
@@ -331,7 +335,7 @@ class TestDaemonRunOnce:
         assert r1.cycle == 1
         assert r2.cycle == 2
 
-    def test_cycle_with_scheduled_prompt_no_events(self, mock_discover):
+    def test_cycle_with_scheduled_prompt_no_events(self, mock_discover, mock_goals):
         runner = self._make_runner(
             inbox_events=[],
             schedule_kwargs={"prompt": "Check deployments"},
@@ -344,7 +348,7 @@ class TestDaemonRunOnce:
         assert result.events_found == 0
         assert result.response == "Checked deployments"
 
-    def test_cycle_error_handling(self, mock_discover):
+    def test_cycle_error_handling(self, mock_discover, mock_goals):
         runner = self._make_runner(inbox_events=_sample_events(1))
 
         with patch.object(runner, "_run_loop", side_effect=RuntimeError("LLM failed")):
@@ -353,7 +357,7 @@ class TestDaemonRunOnce:
         assert result.error == "LLM failed"
         assert result.response == ""
 
-    def test_max_iterations_error(self, mock_discover):
+    def test_max_iterations_error(self, mock_discover, mock_goals):
         runner = self._make_runner(inbox_events=_sample_events(1))
 
         with patch.object(runner, "_run_loop", side_effect=MaxIterationsError(10)):
@@ -361,7 +365,7 @@ class TestDaemonRunOnce:
 
         assert result.error == "Max tool iterations exceeded"
 
-    def test_secrets_injected(self, mock_discover):
+    def test_secrets_injected(self, mock_discover, mock_goals):
         runner = self._make_runner(inbox_events=_sample_events(1))
 
         with patch.object(runner, "_run_loop", return_value="done"):
@@ -369,7 +373,7 @@ class TestDaemonRunOnce:
 
         assert runner._run_secrets.get("MY_KEY") == "my_val"
 
-    def test_system_prompt_includes_daemon_instructions(self, mock_discover):
+    def test_system_prompt_includes_daemon_instructions(self, mock_discover, mock_goals):
         runner = self._make_runner(inbox_events=_sample_events(1))
 
         with patch.object(runner, "_run_loop", return_value="done"):
@@ -383,6 +387,7 @@ class TestDaemonRunOnce:
 # ── run loop ─────────────────────────────────────────────────────────
 
 
+@patch(_PATCH_HAS_GOALS, return_value=False)
 @patch(_PATCH_DISCOVER, return_value=[])
 class TestDaemonRunLoop:
     def _make_runner(self, interval="1s", inbox_events=None, **kwargs):
@@ -392,7 +397,7 @@ class TestDaemonRunLoop:
             runner = DaemonRunner(config)
         return runner
 
-    def test_shutdown_stops_loop(self, mock_discover):
+    def test_shutdown_stops_loop(self, mock_discover, mock_goals):
         runner = self._make_runner(interval="1s")
         cycles = []
 
@@ -405,7 +410,7 @@ class TestDaemonRunLoop:
         assert len(cycles) == 1
         assert cycles[0].skipped is True
 
-    def test_multiple_cycles(self, mock_discover):
+    def test_multiple_cycles(self, mock_discover, mock_goals):
         runner = self._make_runner(interval="0.1s")
         cycles = []
 
@@ -418,7 +423,7 @@ class TestDaemonRunLoop:
 
         assert len(cycles) == 3
 
-    def test_error_in_cycle_doesnt_stop_loop(self, mock_discover):
+    def test_error_in_cycle_doesnt_stop_loop(self, mock_discover, mock_goals):
         runner = self._make_runner(interval="0.1s", inbox_events=_sample_events(1))
         cycles = []
         call_count = 0
@@ -442,7 +447,7 @@ class TestDaemonRunLoop:
         assert cycles[0].error == "Transient error"
         assert cycles[1].error is None
 
-    def test_wall_clock_timing(self, mock_discover):
+    def test_wall_clock_timing(self, mock_discover, mock_goals):
         runner = self._make_runner(interval="0.5s")
         timestamps = []
 
@@ -458,7 +463,7 @@ class TestDaemonRunLoop:
             gap = timestamps[1] - timestamps[0]
             assert 0.3 < gap < 1.0  # Allow some tolerance
 
-    def test_shutdown_via_external_thread(self, mock_discover):
+    def test_shutdown_via_external_thread(self, mock_discover, mock_goals):
         runner = self._make_runner(interval="10s")
         started = threading.Event()
 

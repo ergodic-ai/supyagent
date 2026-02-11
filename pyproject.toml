@@ -1,6 +1,6 @@
 [project]
 name = "supyagent"
-version = "0.5.7"
+version = "0.5.12"
 description = "LLM agents powered by supypowers - build AI agents with tool use, multi-agent orchestration, and secure credential management"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -46,6 +46,8 @@ dependencies = [
     "supypowers>=0.3.2",
     "prompt_toolkit>=3.0",
     "questionary>=2.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
 ]
 
 [project.optional-dependencies]

@@ -51,6 +51,7 @@ class ExecutionRunner(BaseAgentEngine):
         super().__init__(config)
         self.credential_manager = credential_manager or CredentialManager()
         self._run_secrets: dict[str, str] = {}
+        self._goal_driven: bool = False
 
         # Set up delegation if this agent has delegates
         if config.delegates:
@@ -249,6 +250,21 @@ class ExecutionRunner(BaseAgentEngine):
     def _format_structured_input(self, task: dict[str, Any]) -> str:
         """Format a structured input dict into a prompt."""
         return json.dumps(task, indent=2)
+
+    def _format_goal_driven_message(self, task: str) -> str:
+        """Format a goal-driven user message, optionally incorporating the task."""
+        if task.strip():
+            return (
+                "Start working toward the workspace goals. "
+                f"Your immediate focus: {task}\n\n"
+                "Read GOALS.md, break down what needs to happen into subgoals, "
+                "and begin executing. Keep working until the goals are met or you are blocked."
+            )
+        return (
+            "Start working toward the workspace goals. "
+            "Read GOALS.md, break down what needs to happen into subgoals, "
+            "and begin executing. Keep working until all goals are met or you are blocked."
+        )
 
     def _format_output(self, content: str, output_format: str) -> dict[str, Any]:
         """Format the output according to requested format."""

@@ -92,8 +92,13 @@ class DaemonRunner(BaseAgentEngine):
         self._max_events = config.schedule.max_events_per_cycle
         self._scheduled_prompt = config.schedule.prompt
 
-        # Service client is required for inbox access
-        if not self._service_client:
+        # Auto-detect goal-driven mode from GOALS.md
+        from supyagent.core.workspace import has_active_goals
+
+        self._goal_driven = has_active_goals()
+
+        # Service client is required for inbox access (unless goal-driven)
+        if not self._service_client and not self._goal_driven:
             raise DaemonConfigError(
                 "Daemon mode requires service connection. "
                 "Run 'supyagent connect' first."
@@ -149,9 +154,10 @@ class DaemonRunner(BaseAgentEngine):
         return self._run_secrets
 
     def _system_prompt_kwargs(self) -> dict[str, Any]:
-        """Add is_daemon flag to system prompt kwargs."""
+        """Add is_daemon and is_goal_driven flags to system prompt kwargs."""
         kwargs = super()._system_prompt_kwargs()
         kwargs["is_daemon"] = True
+        kwargs["is_goal_driven"] = self._goal_driven
         return kwargs
 
     def _dispatch_tool_call(self, tool_call: Any) -> dict[str, Any]:
@@ -197,6 +203,19 @@ class DaemonRunner(BaseAgentEngine):
                 parts.append("\nAdditionally, perform this scheduled task:")
             parts.append(self._scheduled_prompt)
 
+        if self._goal_driven:
+            if events:
+                parts.append(
+                    "\nAfter processing events, also check GOALS.md and "
+                    "make progress on any pending subgoals if time permits."
+                )
+            elif not self._scheduled_prompt:
+                # No events and no scheduled prompt — work on goals
+                parts.append(
+                    "No new events. Check GOALS.md for pending subgoals and "
+                    "continue making progress toward the workspace goals."
+                )
+
         return "\n".join(parts)
 
     def run_once(
@@ -219,14 +238,18 @@ class DaemonRunner(BaseAgentEngine):
 
         start = time.monotonic()
 
-        # Fetch unread events
-        inbox_result = self._service_client.inbox_list(
-            status="unread", limit=self._max_events
-        )
-        events = inbox_result.get("events", [])
-        total_unread = inbox_result.get("total", 0)
+        # Fetch unread events (skip if no service client)
+        if self._service_client:
+            inbox_result = self._service_client.inbox_list(
+                status="unread", limit=self._max_events
+            )
+            events = inbox_result.get("events", [])
+            total_unread = inbox_result.get("total", 0)
+        else:
+            events = []
+            total_unread = 0
 
-        has_work = bool(events) or bool(self._scheduled_prompt)
+        has_work = bool(events) or bool(self._scheduled_prompt) or self._goal_driven
 
         if not has_work:
             elapsed = time.monotonic() - start
