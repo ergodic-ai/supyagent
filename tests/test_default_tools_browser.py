@@ -1,43 +1,25 @@
 """
-Comprehensive tests for default_tools/browser.py.
+Comprehensive tests for browser daemon command dispatch.
 
 Covers: browse, screenshot, click, type_text, get_page_state, close_browser
 Uses mocked Playwright to avoid requiring actual browser installation.
+
+The browser daemon (supyagent.core.browser_daemon) is the single source of
+truth for all browser automation in supyagent.
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-import pytest
-
-from supyagent.default_tools.browser import (
+from supyagent.core.browser_daemon import (
     BrowseInput,
     ClickInput,
-    CloseBrowserInput,
     GetPageStateInput,
     ScreenshotInput,
     TypeTextInput,
+    _dispatch_command,
     _html_to_markdown,
-    browse,
-    click,
-    close_browser,
-    get_page_state,
-    screenshot,
-    type_text,
 )
-
-
-@pytest.fixture(autouse=True)
-def reset_browser_state():
-    """Reset browser module state before and after each test."""
-    import supyagent.default_tools.browser as browser_mod
-    browser_mod._browser = None
-    browser_mod._context = None
-    browser_mod._page = None
-    yield
-    browser_mod._browser = None
-    browser_mod._context = None
-    browser_mod._page = None
 
 
 def _make_mock_page(
@@ -56,20 +38,12 @@ def _make_mock_page(
     return page
 
 
-def _inject_mock_page(page_mock):
-    """Inject a mock page into the browser module."""
-    import supyagent.default_tools.browser as browser_mod
-    browser_mod._page = page_mock
-    browser_mod._browser = MagicMock()
-    browser_mod._context = MagicMock()
-
-
 # =========================================================================
-# _html_to_markdown (browser's own copy)
+# _html_to_markdown
 # =========================================================================
 
 
-class TestBrowserHtmlToMarkdown:
+class TestHtmlToMarkdown:
     def test_basic_conversion(self):
         html = "<h1>Title</h1><p>Content here</p>"
         result = _html_to_markdown(html)
@@ -90,342 +64,374 @@ class TestBrowserHtmlToMarkdown:
 
 
 # =========================================================================
-# browse
+# browse command
 # =========================================================================
 
 
 class TestBrowse:
-    def test_browse_basic(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_browse_basic(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = browse(BrowseInput(url="https://example.com"))
-        assert result.ok is True
-        assert result.title == "Test Page"
-        assert result.url == "https://example.com"
-        assert "Hello World" in result.content
+        result = _dispatch_command("browse", {"url": "https://example.com"})
+        assert result["ok"] is True
+        assert result["data"]["title"] == "Test Page"
+        assert result["data"]["url"] == "https://example.com"
+        assert "Hello World" in result["data"]["content"]
         page.goto.assert_called_once()
 
-    def test_browse_with_networkidle(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_browse_with_networkidle(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = browse(BrowseInput(url="https://example.com", wait_for="networkidle"))
-        assert result.ok is True
+        result = _dispatch_command(
+            "browse", {"url": "https://example.com", "wait_for": "networkidle"}
+        )
+        assert result["ok"] is True
         page.goto.assert_called_with(
             "https://example.com", wait_until="networkidle", timeout=30000
         )
 
-    def test_browse_with_css_selector(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_browse_with_css_selector(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = browse(BrowseInput(url="https://example.com", wait_for="#main-content"))
-        assert result.ok is True
+        result = _dispatch_command(
+            "browse", {"url": "https://example.com", "wait_for": "#main-content"}
+        )
+        assert result["ok"] is True
         page.goto.assert_called_with(
             "https://example.com", wait_until="domcontentloaded", timeout=30000
         )
         page.wait_for_selector.assert_called_with("#main-content", timeout=30000)
 
-    def test_browse_with_domcontentloaded(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_browse_with_domcontentloaded(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = browse(BrowseInput(url="https://example.com", wait_for="domcontentloaded"))
-        assert result.ok is True
+        result = _dispatch_command(
+            "browse", {"url": "https://example.com", "wait_for": "domcontentloaded"}
+        )
+        assert result["ok"] is True
 
-    def test_browse_truncation(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_browse_truncation(self, mock_get_page):
         long_content = "<html><body><p>" + "word " * 20000 + "</p></body></html>"
         page = _make_mock_page(content=long_content)
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = browse(BrowseInput(url="https://example.com", max_length=100))
-        assert result.ok is True
-        assert result.truncated is True
-        assert "[truncated]" in result.content
+        result = _dispatch_command(
+            "browse", {"url": "https://example.com", "max_length": 100}
+        )
+        assert result["ok"] is True
+        assert result["data"]["truncated"] is True
+        assert "[truncated]" in result["data"]["content"]
 
-    def test_browse_error_handling(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_browse_error_handling(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
         page.goto.side_effect = Exception("Navigation failed")
 
-        result = browse(BrowseInput(url="https://example.com"))
-        assert result.ok is False
-        assert "Navigation failed" in result.error
+        result = _dispatch_command("browse", {"url": "https://example.com"})
+        assert result["ok"] is False
+        assert "Navigation failed" in result["error"]
 
-    def test_browse_playwright_not_installed(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_browse_playwright_not_installed(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
         page.goto.side_effect = Exception("Executable doesn't exist at /path/chromium")
 
-        result = browse(BrowseInput(url="https://example.com"))
-        assert result.ok is False
-        assert "playwright install" in result.error.lower()
+        result = _dispatch_command("browse", {"url": "https://example.com"})
+        assert result["ok"] is False
+        assert "playwright install" in result["error"].lower()
 
-    def test_browse_updates_url_after_redirect(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_browse_updates_url_after_redirect(self, mock_get_page):
         page = _make_mock_page(url="https://example.com/final")
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = browse(BrowseInput(url="https://example.com/redirect"))
-        assert result.ok is True
-        assert result.url == "https://example.com/final"
+        result = _dispatch_command("browse", {"url": "https://example.com/redirect"})
+        assert result["ok"] is True
+        assert result["data"]["url"] == "https://example.com/final"
 
 
 # =========================================================================
-# screenshot
+# screenshot command
 # =========================================================================
 
 
 class TestScreenshot:
-    def test_screenshot_with_url(self, tmp_path):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_screenshot_with_url(self, mock_get_page, tmp_path):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
         output_path = str(tmp_path / "test.png")
-        result = screenshot(
-            ScreenshotInput(url="https://example.com", output_path=output_path)
+        result = _dispatch_command(
+            "screenshot", {"url": "https://example.com", "output_path": output_path}
         )
-        assert result.ok is True
-        assert result.width == 1280
-        assert result.height == 720
-        assert result.url == "https://example.com"
+        assert result["ok"] is True
+        assert result["data"]["width"] == 1280
+        assert result["data"]["height"] == 720
+        assert result["data"]["url"] == "https://example.com"
         page.goto.assert_called_once()
         page.screenshot.assert_called_once()
 
-    def test_screenshot_current_page(self, tmp_path):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_screenshot_current_page(self, mock_get_page, tmp_path):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
         output_path = str(tmp_path / "current.png")
-        result = screenshot(ScreenshotInput(output_path=output_path))
-        assert result.ok is True
-        page.goto.assert_not_called()  # No URL = screenshot current page
+        result = _dispatch_command("screenshot", {"output_path": output_path})
+        assert result["ok"] is True
+        page.goto.assert_not_called()
         page.screenshot.assert_called_once()
 
-    def test_screenshot_full_page(self, tmp_path):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_screenshot_full_page(self, mock_get_page, tmp_path):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
         output_path = str(tmp_path / "full.png")
-        result = screenshot(
-            ScreenshotInput(
-                url="https://example.com",
-                output_path=output_path,
-                full_page=True,
-            )
+        result = _dispatch_command(
+            "screenshot",
+            {"url": "https://example.com", "output_path": output_path, "full_page": True},
         )
-        assert result.ok is True
+        assert result["ok"] is True
         page.screenshot.assert_called_with(path=output_path, full_page=True)
 
-    def test_screenshot_creates_parent_dirs(self, tmp_path):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_screenshot_creates_parent_dirs(self, mock_get_page, tmp_path):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
         output_path = str(tmp_path / "sub" / "dir" / "test.png")
-        result = screenshot(
-            ScreenshotInput(url="https://example.com", output_path=output_path)
+        result = _dispatch_command(
+            "screenshot", {"url": "https://example.com", "output_path": output_path}
         )
-        assert result.ok is True
+        assert result["ok"] is True
         assert Path(output_path).parent.exists()
 
-    def test_screenshot_error(self, tmp_path):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_screenshot_error(self, mock_get_page, tmp_path):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
         page.screenshot.side_effect = Exception("Screenshot failed")
 
-        result = screenshot(
-            ScreenshotInput(
-                url="https://example.com",
-                output_path=str(tmp_path / "fail.png"),
-            )
+        result = _dispatch_command(
+            "screenshot",
+            {"url": "https://example.com", "output_path": str(tmp_path / "fail.png")},
         )
-        assert result.ok is False
-        assert "Screenshot failed" in result.error
+        assert result["ok"] is False
+        assert "Screenshot failed" in result["error"]
 
-    def test_screenshot_with_css_wait(self, tmp_path):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_screenshot_with_css_wait(self, mock_get_page, tmp_path):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = screenshot(
-            ScreenshotInput(
-                url="https://example.com",
-                output_path=str(tmp_path / "test.png"),
-                wait_for="#loaded",
-            )
+        result = _dispatch_command(
+            "screenshot",
+            {
+                "url": "https://example.com",
+                "output_path": str(tmp_path / "test.png"),
+                "wait_for": "#loaded",
+            },
         )
-        assert result.ok is True
+        assert result["ok"] is True
         page.wait_for_selector.assert_called_with("#loaded", timeout=30000)
 
 
 # =========================================================================
-# click
+# click command
 # =========================================================================
 
 
 class TestClick:
-    def test_click_by_selector(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_click_by_selector(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = click(ClickInput(selector="#submit-btn"))
-        assert result.ok is True
-        assert result.url == "https://example.com"
-        assert result.title == "Test Page"
+        result = _dispatch_command("click", {"selector": "#submit-btn"})
+        assert result["ok"] is True
+        assert result["data"]["url"] == "https://example.com"
+        assert result["data"]["title"] == "Test Page"
         page.click.assert_called_with("#submit-btn", timeout=10000)
 
-    def test_click_by_text(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_click_by_text(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = click(ClickInput(selector="text=Login"))
-        assert result.ok is True
+        result = _dispatch_command("click", {"selector": "text=Login"})
+        assert result["ok"] is True
         page.click.assert_called_with("text=Login", timeout=10000)
 
-    def test_click_waits_after(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_click_waits_after(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = click(ClickInput(selector="#btn", wait_after=2000))
-        assert result.ok is True
+        result = _dispatch_command("click", {"selector": "#btn", "wait_after": 2000})
+        assert result["ok"] is True
         page.wait_for_timeout.assert_called_with(2000)
 
-    def test_click_element_not_found(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_click_element_not_found(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
         page.click.side_effect = Exception("Element not found: #nonexistent")
 
-        result = click(ClickInput(selector="#nonexistent"))
-        assert result.ok is False
-        assert "not found" in result.error.lower()
+        result = _dispatch_command("click", {"selector": "#nonexistent"})
+        assert result["ok"] is False
+        assert "not found" in result["error"].lower()
 
-    def test_click_with_custom_timeout(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_click_with_custom_timeout(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = click(ClickInput(selector="#btn", timeout=5000))
-        assert result.ok is True
+        result = _dispatch_command("click", {"selector": "#btn", "timeout": 5000})
+        assert result["ok"] is True
         page.click.assert_called_with("#btn", timeout=5000)
 
-    def test_click_url_changes(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_click_url_changes(self, mock_get_page):
         page = _make_mock_page(url="https://example.com/new-page")
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = click(ClickInput(selector="a[href='/new-page']"))
-        assert result.ok is True
-        assert result.url == "https://example.com/new-page"
+        result = _dispatch_command("click", {"selector": "a[href='/new-page']"})
+        assert result["ok"] is True
+        assert result["data"]["url"] == "https://example.com/new-page"
 
 
 # =========================================================================
-# type_text
+# type_text command
 # =========================================================================
 
 
 class TestTypeText:
-    def test_type_with_clear(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_type_with_clear(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = type_text(
-            TypeTextInput(selector="#search", text="hello world", clear_first=True)
+        result = _dispatch_command(
+            "type_text", {"selector": "#search", "text": "hello world", "clear_first": True}
         )
-        assert result.ok is True
+        assert result["ok"] is True
         page.fill.assert_called_with("#search", "hello world", timeout=10000)
 
-    def test_type_without_clear(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_type_without_clear(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = type_text(
-            TypeTextInput(selector="#search", text="append", clear_first=False)
+        result = _dispatch_command(
+            "type_text", {"selector": "#search", "text": "append", "clear_first": False}
         )
-        assert result.ok is True
+        assert result["ok"] is True
         page.type.assert_called_with("#search", "append", timeout=10000)
         page.fill.assert_not_called()
 
-    def test_type_with_enter(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_type_with_enter(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = type_text(
-            TypeTextInput(selector="#search", text="query", press_enter=True)
+        result = _dispatch_command(
+            "type_text", {"selector": "#search", "text": "query", "press_enter": True}
         )
-        assert result.ok is True
+        assert result["ok"] is True
         page.press.assert_called_with("#search", "Enter")
 
-    def test_type_without_enter(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_type_without_enter(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = type_text(
-            TypeTextInput(selector="#search", text="query", press_enter=False)
+        result = _dispatch_command(
+            "type_text", {"selector": "#search", "text": "query", "press_enter": False}
         )
-        assert result.ok is True
+        assert result["ok"] is True
         page.press.assert_not_called()
 
-    def test_type_element_not_found(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_type_element_not_found(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
         page.fill.side_effect = Exception("Element not found")
 
-        result = type_text(TypeTextInput(selector="#nope", text="test"))
-        assert result.ok is False
+        result = _dispatch_command("type_text", {"selector": "#nope", "text": "test"})
+        assert result["ok"] is False
 
-    def test_type_into_named_input(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_type_into_named_input(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = type_text(
-            TypeTextInput(selector="input[name=email]", text="user@example.com")
+        result = _dispatch_command(
+            "type_text", {"selector": "input[name=email]", "text": "user@example.com"}
         )
-        assert result.ok is True
+        assert result["ok"] is True
         page.fill.assert_called_with("input[name=email]", "user@example.com", timeout=10000)
 
 
 # =========================================================================
-# get_page_state
+# get_page_state command
 # =========================================================================
 
 
 class TestGetPageState:
-    def test_basic_state(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_basic_state(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = get_page_state(GetPageStateInput())
-        assert result.ok is True
-        assert result.url == "https://example.com"
-        assert result.title == "Test Page"
-        assert result.text is not None
-        assert "Hello World" in result.text
+        result = _dispatch_command("get_page_state", {})
+        assert result["ok"] is True
+        assert result["data"]["url"] == "https://example.com"
+        assert result["data"]["title"] == "Test Page"
+        assert "Hello World" in result["data"]["text"]
 
-    def test_state_without_text(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_state_without_text(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = get_page_state(GetPageStateInput(include_text=False))
-        assert result.ok is True
-        assert result.text is None
+        result = _dispatch_command("get_page_state", {"include_text": False})
+        assert result["ok"] is True
+        assert "text" not in result["data"]
 
-    def test_state_with_links(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_state_with_links(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
         page.evaluate.return_value = [
             {"text": "Example Link", "href": "https://example.com/page"},
             {"text": "Another", "href": "https://example.com/other"},
         ]
 
-        result = get_page_state(
-            GetPageStateInput(include_links=True, include_inputs=False, include_text=False)
+        result = _dispatch_command(
+            "get_page_state",
+            {"include_links": True, "include_inputs": False, "include_text": False},
         )
-        assert result.ok is True
-        assert result.links is not None
-        assert len(result.links) == 2
-        assert result.links[0].text == "Example Link"
+        assert result["ok"] is True
+        assert len(result["data"]["links"]) == 2
+        assert result["data"]["links"][0]["text"] == "Example Link"
 
-    def test_state_with_inputs(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_state_with_inputs(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
-        # First evaluate call returns links (empty), second returns inputs
+        mock_get_page.return_value = page
         page.evaluate.side_effect = [
             [],  # links
             [
@@ -434,7 +440,7 @@ class TestGetPageState:
                     "name": "username",
                     "placeholder": "Enter username",
                     "value": "",
-                    "selector": "input[name=\"username\"]",
+                    "selector": 'input[name="username"]',
                 },
                 {
                     "type": "button",
@@ -446,143 +452,192 @@ class TestGetPageState:
             ],
         ]
 
-        result = get_page_state(
-            GetPageStateInput(include_links=True, include_inputs=True, include_text=False)
+        result = _dispatch_command(
+            "get_page_state",
+            {"include_links": True, "include_inputs": True, "include_text": False},
         )
-        assert result.ok is True
-        assert result.inputs is not None
-        assert len(result.inputs) == 2
-        assert result.inputs[0].type == "text"
-        assert result.inputs[0].name == "username"
-        assert result.inputs[1].type == "button"
+        assert result["ok"] is True
+        assert len(result["data"]["inputs"]) == 2
+        assert result["data"]["inputs"][0]["type"] == "text"
+        assert result["data"]["inputs"][0]["name"] == "username"
+        assert result["data"]["inputs"][1]["type"] == "button"
 
-    def test_state_without_links(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_state_without_links(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = get_page_state(
-            GetPageStateInput(include_links=False, include_inputs=False, include_text=False)
+        result = _dispatch_command(
+            "get_page_state",
+            {"include_links": False, "include_inputs": False, "include_text": False},
         )
-        assert result.ok is True
-        assert result.links is None
-        assert result.inputs is None
+        assert result["ok"] is True
+        assert "links" not in result["data"]
+        assert "inputs" not in result["data"]
 
-    def test_state_text_truncation(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_state_text_truncation(self, mock_get_page):
         long_content = "<html><body><p>" + "word " * 10000 + "</p></body></html>"
         page = _make_mock_page(content=long_content)
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result = get_page_state(GetPageStateInput(max_length=100))
-        assert result.ok is True
-        assert "[truncated]" in result.text
+        result = _dispatch_command("get_page_state", {"max_length": 100})
+        assert result["ok"] is True
+        assert "[truncated]" in result["data"]["text"]
 
-    def test_state_error(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_state_error(self, mock_get_page):
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
         page.content.side_effect = Exception("Page crashed")
 
-        result = get_page_state(GetPageStateInput())
-        assert result.ok is False
-        assert "Page crashed" in result.error
+        result = _dispatch_command("get_page_state", {})
+        assert result["ok"] is False
+        assert "Page crashed" in result["error"]
 
 
 # =========================================================================
-# close_browser
+# close_browser command
 # =========================================================================
 
 
 class TestCloseBrowser:
-    def test_close_browser(self):
-        import supyagent.default_tools.browser as browser_mod
+    @patch("supyagent.core.browser_daemon._close_browser")
+    def test_close_browser(self, mock_close):
+        result = _dispatch_command("close_browser", {})
+        assert result["ok"] is True
+        mock_close.assert_called_once()
 
-        page = _make_mock_page()
-        _inject_mock_page(page)
+    @patch("supyagent.core.browser_daemon._close_browser")
+    def test_close_browser_twice(self, mock_close):
+        result1 = _dispatch_command("close_browser", {})
+        assert result1["ok"] is True
 
-        result = close_browser(CloseBrowserInput())
-        assert result.ok is True
-        assert browser_mod._page is None
-        assert browser_mod._browser is None
-        assert browser_mod._context is None
-
-    def test_close_browser_when_not_open(self):
-        result = close_browser(CloseBrowserInput())
-        assert result.ok is True  # Should not error
-
-    def test_close_browser_twice(self):
-        page = _make_mock_page()
-        _inject_mock_page(page)
-
-        result1 = close_browser(CloseBrowserInput())
-        assert result1.ok is True
-
-        result2 = close_browser(CloseBrowserInput())
-        assert result2.ok is True
+        result2 = _dispatch_command("close_browser", {})
+        assert result2["ok"] is True
 
 
 # =========================================================================
-# Integration flows (mocked)
+# Integration flows (mocked via daemon dispatch)
 # =========================================================================
 
 
 class TestBrowserFlows:
-    def test_browse_then_click(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_browse_then_click(self, mock_get_page):
         """Navigate to a page, then click a button."""
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        result1 = browse(BrowseInput(url="https://example.com"))
-        assert result1.ok is True
+        result1 = _dispatch_command("browse", {"url": "https://example.com"})
+        assert result1["ok"] is True
 
         # After click, URL changes
         page.url = "https://example.com/next"
         page.title.return_value = "Next Page"
 
-        result2 = click(ClickInput(selector="#next-btn"))
-        assert result2.ok is True
-        assert result2.url == "https://example.com/next"
+        result2 = _dispatch_command("click", {"selector": "#next-btn"})
+        assert result2["ok"] is True
+        assert result2["data"]["url"] == "https://example.com/next"
 
-    def test_browse_type_and_submit(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_browse_type_and_submit(self, mock_get_page):
         """Navigate, fill form, submit."""
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        browse(BrowseInput(url="https://example.com/login"))
-
-        type_text(TypeTextInput(selector="#email", text="user@example.com"))
-        type_text(TypeTextInput(selector="#password", text="secret123"))
+        _dispatch_command("browse", {"url": "https://example.com/login"})
+        _dispatch_command("type_text", {"selector": "#email", "text": "user@example.com"})
+        _dispatch_command("type_text", {"selector": "#password", "text": "secret123"})
 
         page.url = "https://example.com/dashboard"
-        result = click(ClickInput(selector="#login-btn"))
-        assert result.ok is True
-        assert result.url == "https://example.com/dashboard"
+        result = _dispatch_command("click", {"selector": "#login-btn"})
+        assert result["ok"] is True
+        assert result["data"]["url"] == "https://example.com/dashboard"
 
-    def test_browse_then_screenshot(self, tmp_path):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_browse_then_screenshot(self, mock_get_page, tmp_path):
         """Navigate then take screenshot."""
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
 
-        browse(BrowseInput(url="https://example.com"))
+        _dispatch_command("browse", {"url": "https://example.com"})
 
-        result = screenshot(ScreenshotInput(output_path=str(tmp_path / "shot.png")))
-        assert result.ok is True
-        assert result.url == "https://example.com"
+        result = _dispatch_command(
+            "screenshot", {"output_path": str(tmp_path / "shot.png")}
+        )
+        assert result["ok"] is True
+        assert result["data"]["url"] == "https://example.com"
 
-    def test_get_state_then_interact(self):
+    @patch("supyagent.core.browser_daemon._get_page")
+    def test_get_state_then_interact(self, mock_get_page):
         """Check page state, then interact based on findings."""
         page = _make_mock_page()
-        _inject_mock_page(page)
+        mock_get_page.return_value = page
         page.evaluate.side_effect = [
-            [{"text": "Products", "href": "https://example.com/products"}],  # links
-            [{"type": "text", "name": "search", "placeholder": "Search...", "value": "", "selector": "#search"}],  # inputs
+            [{"text": "Products", "href": "https://example.com/products"}],
+            [
+                {
+                    "type": "text",
+                    "name": "search",
+                    "placeholder": "Search...",
+                    "value": "",
+                    "selector": "#search",
+                }
+            ],
         ]
 
-        state = get_page_state(GetPageStateInput(include_text=False))
-        assert state.ok is True
-        assert len(state.links) == 1
-        assert len(state.inputs) == 1
-
-        # Now type into the search box found in state
-        result = type_text(
-            TypeTextInput(selector=state.inputs[0].selector, text="laptop", press_enter=True)
+        state = _dispatch_command(
+            "get_page_state", {"include_text": False}
         )
-        assert result.ok is True
+        assert state["ok"] is True
+        assert len(state["data"]["links"]) == 1
+        assert len(state["data"]["inputs"]) == 1
+
+        # Type into the search box found in state
+        result = _dispatch_command(
+            "type_text",
+            {
+                "selector": state["data"]["inputs"][0]["selector"],
+                "text": "laptop",
+                "press_enter": True,
+            },
+        )
+        assert result["ok"] is True
+
+
+# =========================================================================
+# Input model validation
+# =========================================================================
+
+
+class TestInputModels:
+    def test_browse_input_defaults(self):
+        inp = BrowseInput(url="https://example.com")
+        assert inp.wait_for == "networkidle"
+        assert inp.timeout == 30000
+        assert inp.max_length == 50000
+
+    def test_screenshot_input_defaults(self):
+        inp = ScreenshotInput()
+        assert inp.url is None
+        assert inp.output_path == "screenshot.png"
+        assert inp.full_page is False
+
+    def test_click_input_defaults(self):
+        inp = ClickInput(selector="#btn")
+        assert inp.wait_after == 1000
+        assert inp.timeout == 10000
+
+    def test_type_text_input_defaults(self):
+        inp = TypeTextInput(selector="#input", text="hello")
+        assert inp.clear_first is True
+        assert inp.press_enter is False
+        assert inp.timeout == 10000
+
+    def test_get_page_state_input_defaults(self):
+        inp = GetPageStateInput()
+        assert inp.include_links is True
+        assert inp.include_inputs is True
+        assert inp.include_text is True
+        assert inp.max_length == 20000

@@ -1,6 +1,6 @@
 [project]
 name = "supyagent"
-version = "0.5.6"
+version = "0.5.7"
 description = "LLM agents powered by supypowers - build AI agents with tool use, multi-agent orchestration, and secure credential management"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -45,6 +45,7 @@ dependencies = [
     "httpx>=0.25.0",
     "supypowers>=0.3.2",
     "prompt_toolkit>=3.0",
+    "questionary>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +54,7 @@ browser = [
     "markdownify>=0.12.0",
     "beautifulsoup4>=4.12.0",
     "playwright>=1.40.0",
+    "playwright-stealth>=1.0.6",
 ]
 web = [
     "httpx>=0.25.0",

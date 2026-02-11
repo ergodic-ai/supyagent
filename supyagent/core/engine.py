@@ -35,6 +35,7 @@ from supyagent.utils.media import (
 )
 
 if TYPE_CHECKING:
+    from supyagent.core.browser_session import BrowserSessionManager
     from supyagent.core.delegation import DelegationManager
     from supyagent.core.memory import MemoryManager
     from supyagent.core.registry import AgentRegistry
@@ -111,6 +112,9 @@ class BaseAgentEngine(ABC):
             from supyagent.core.service import get_service_client
 
             self._service_client = get_service_client()
+
+        # Persistent browser session (lazy-initialized on first browser tool call)
+        self._browser_session: "BrowserSessionManager | None" = None
 
         # Telemetry
         self.telemetry: "TelemetryCollector | None" = None
@@ -216,11 +220,13 @@ class BaseAgentEngine(ABC):
     def _system_prompt_kwargs(self) -> dict[str, Any]:
         """Get kwargs for get_full_system_prompt based on engine state."""
         from supyagent.core.sandbox import create_sandbox_context_prompt
+        from supyagent.core.workspace import read_goals
 
         return {
             "supypowers_available": self.supypowers_available,
             "has_service": self._service_client is not None,
             "sandbox_context": create_sandbox_context_prompt(self.config, self.sandbox_mgr),
+            "goals_content": read_goals(),
         }
 
     def _build_messages_for_llm(self) -> list[dict[str, Any]]:
@@ -298,8 +304,11 @@ class BaseAgentEngine(ABC):
         elif is_service:
             # 3. Service tools (HTTP routing to supyagent_service)
             result = self._execute_service_tool(tool_call)
+        elif self._is_browser_tool(name):
+            # 4. Browser tools (persistent daemon)
+            result = self._execute_browser_tool(tool_call)
         else:
-            # 4. Supypowers tools (through supervisor)
+            # 5. Supypowers tools (through supervisor)
             result = self._execute_supypowers_tool(tool_call)
 
         elapsed_ms = (_time.monotonic() - start) * 1000
@@ -384,6 +393,35 @@ class BaseAgentEngine(ABC):
             }
 
         return self._service_client.execute_tool(name, args, metadata)
+
+    @staticmethod
+    def _is_browser_tool(name: str) -> bool:
+        """Check if a tool name is a browser tool that should use the persistent daemon."""
+        return name.startswith("browser__")
+
+    def _execute_browser_tool(self, tool_call: Any) -> dict[str, Any]:
+        """Execute a browser tool via the persistent browser daemon."""
+        name = tool_call.function.name
+
+        try:
+            args = json.loads(tool_call.function.arguments)
+        except json.JSONDecodeError:
+            return {
+                "ok": False,
+                "error": f"Invalid JSON arguments: {tool_call.function.arguments}",
+                "error_type": "invalid_args",
+            }
+
+        # Extract command from tool name (browser__browse -> browse)
+        command = name.split("__", 1)[1] if "__" in name else name
+
+        # Lazy-initialize the browser session manager
+        if self._browser_session is None:
+            from supyagent.core.browser_session import BrowserSessionManager
+
+            self._browser_session = BrowserSessionManager()
+
+        return self._browser_session.execute(command, args)
 
     def _execute_memory_tool(self, tool_call: Any) -> dict[str, Any]:
         """Execute a memory tool (search, write, recall)."""
