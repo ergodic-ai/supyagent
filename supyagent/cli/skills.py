@@ -28,6 +28,9 @@ PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "twilio": "Twilio",
     "resend": "Resend",
     "inbox": "AI Inbox",
+    "platform-search": "Platform Services - Search",
+    "platform-multimodal": "Platform Services - Multimodal",
+    "platform-compute": "Platform Services - Compute & Data",
 }
 
 # Providers whose tools should be split by service rather than grouped together.
@@ -38,7 +41,35 @@ SERVICE_DISPLAY_NAMES: dict[str, str] = {
     "gmail": "Gmail",
     "calendar": "Google Calendar",
     "drive": "Google Drive",
+    "slides": "Google Slides",
     "mail": "Outlook Mail",
+}
+
+# Custom description overrides for skill keys that need keyword-rich descriptions
+# instead of the auto-generated action list.
+PROVIDER_DESCRIPTION_OVERRIDES: dict[str, str] = {
+    "platform-search": (
+        "Use supyagent to search the web, find images, discover videos, read news, "
+        "find local places, compare shopping results, and search academic papers. "
+        "Powered by Google Search. Use when the user asks to search for information, "
+        "look something up, find images or videos, get news, find nearby places or "
+        "businesses, compare prices or products, or search for academic research and "
+        "scholarly articles."
+    ),
+    "platform-multimodal": (
+        "Use supyagent for OCR text extraction from images and PDFs, speech-to-text "
+        "audio transcription, text-to-speech voice generation, AI image generation, "
+        "AI video generation, and video understanding/analysis. Use when the user asks "
+        "to extract text from a document or image, transcribe audio or video, convert "
+        "text to speech, generate an image from a prompt, create a video, or analyze "
+        "and understand video content."
+    ),
+    "platform-compute": (
+        "Use supyagent to execute Python code in a sandbox, upload and host temporary files, "
+        "and create/query SQLite databases. Use when the user asks to run code, compute something, "
+        "process data, generate a chart or file, store structured data, query a database, or "
+        "persist information across conversations."
+    ),
 }
 
 # Prefix for generated skill directories — used to identify managed files for cleanup.
@@ -166,12 +197,20 @@ def _skill_key(tool: dict) -> str:
     """Return the grouping key for a tool.
 
     Google and Microsoft tools are grouped by their service field (e.g. gmail, calendar).
+    Platform tools are split into search vs multimodal categories.
     All other providers are grouped by provider name.
     """
     metadata = tool.get("metadata", {})
     provider = metadata.get("provider", "unknown")
     if provider in SPLIT_BY_SERVICE_PROVIDERS:
         return metadata.get("service", provider)
+    if provider == "platform":
+        service = metadata.get("service", "")
+        if service.startswith("platform_search"):
+            return "platform-search"
+        if service in ("platform_files", "platform_code", "platform_sqlite"):
+            return "platform-compute"
+        return "platform-multimodal"
     return provider
 
 
@@ -219,8 +258,10 @@ def _build_provider_descriptions(
     return descriptions
 
 
-def _build_group_description(display_name: str, tools: list[dict]) -> str:
+def _build_group_description(display_name: str, tools: list[dict], key: str = "") -> str:
     """Build a concise description for a single skill file's frontmatter."""
+    if key in PROVIDER_DESCRIPTION_OVERRIDES:
+        return PROVIDER_DESCRIPTION_OVERRIDES[key]
     actions: list[str] = []
     for tool in tools:
         func = tool.get("function", {})
@@ -350,7 +391,7 @@ def generate_skill_files(tools: list[dict]) -> dict[str, str]:
     for key in sorted(tools_by_key.keys()):
         group_tools = tools_by_key[key]
         display = _skill_display_name(key)
-        description = _build_group_description(display, group_tools)
+        description = _build_group_description(display, group_tools, key=key)
 
         lines: list[str] = []
 

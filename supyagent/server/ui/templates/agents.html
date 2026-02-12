@@ -1,0 +1,675 @@
+{% extends "base.html" %}
+
+{% block title %}supyagent — Agents Dashboard{% endblock %}
+
+{% block extra_css %}
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+.refresh-indicator {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.refresh-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* Stat bar */
+.stat-bar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  flex: 1;
+  min-width: 120px;
+}
+.stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Agent cards */
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.agent-card {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.agent-card:hover { border-color: var(--border-light); }
+.agent-card.selected { border-color: var(--accent); }
+.agent-card-name { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+.agent-card-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-card-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+.agent-card-error {
+  color: var(--red);
+  font-size: 12px;
+}
+.type-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #1e293b;
+}
+.type-badge.interactive { color: var(--accent); }
+.type-badge.execution { color: var(--yellow); }
+.type-badge.daemon { color: var(--green); }
+
+/* Instance table */
+.instance-section { margin-bottom: 24px; }
+
+/* Status dots */
+.status-active .status-dot { background: var(--green); }
+.status-stale .status-dot { background: var(--yellow); }
+.status-completed .status-dot { background: var(--text-muted); }
+.status-failed .status-dot { background: var(--red); }
+
+/* Detail panel */
+.detail-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 24px;
+  overflow: hidden;
+}
+.detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.detail-header h2 { margin: 0; }
+.detail-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+.detail-tab {
+  padding: 10px 20px;
+  font-size: 13px;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+  background: none;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  font-family: var(--font);
+}
+.detail-tab:hover { color: var(--text); }
+.detail-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.detail-content { padding: 20px; }
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+
+/* Session list */
+.session-row {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.session-row:hover { background: var(--surface-hover); margin: 0 -20px; padding: 10px 20px; }
+.session-row:last-child { border-bottom: none; }
+.session-title { font-weight: 600; font-size: 13px; }
+.session-meta { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+
+/* Message preview */
+.msg-preview {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-top: 8px;
+  padding: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.msg-item { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.msg-item:last-child { border-bottom: none; }
+.msg-role {
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+}
+.msg-role-user { color: var(--text); }
+.msg-role-assistant { color: var(--accent); }
+.msg-role-tool_result { color: var(--text-muted); }
+.msg-role-system { color: var(--yellow); }
+.msg-content {
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+/* Telemetry / Memory stats */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+.mini-stat {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+.mini-stat-value { font-size: 20px; font-weight: 700; }
+.mini-stat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+
+/* Empty state */
+.empty-state { color: var(--text-muted); font-size: 13px; padding: 20px 0; }
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+  <div>
+    <h1>Agents Dashboard</h1>
+    <p class="subtitle">Monitor and manage your agent instances.</p>
+  </div>
+  <div class="refresh-indicator">
+    <span class="refresh-dot"></span>
+    <span id="refresh-label">Auto-refreshing</span>
+  </div>
+</div>
+
+<!-- Overview Stats -->
+<div class="stat-bar" id="stat-bar">
+  <div class="stat-card"><div class="stat-value">-</div><div class="stat-label">Agents</div></div>
+  <div class="stat-card"><div class="stat-value">-</div><div class="stat-label">Active</div></div>
+  <div class="stat-card"><div class="stat-value">-</div><div class="stat-label">Sessions</div></div>
+  <div class="stat-card"><div class="stat-value">-</div><div class="stat-label">Failed</div></div>
+</div>
+
+<!-- Actions -->
+<div class="flex gap-2 mb-4">
+  <button class="btn btn-sm" onclick="cleanup('stale')">Clean Stale</button>
+  <button class="btn btn-sm" onclick="cleanup('completed')">Clean Completed</button>
+  <button class="btn btn-danger btn-sm" onclick="cleanup('all')">Clean All</button>
+</div>
+
+<!-- Agent Configs -->
+<div class="section">
+  <h3>Agent Configs</h3>
+  <div class="agent-grid" id="agent-grid">
+    <div class="text-dim">Loading...</div>
+  </div>
+</div>
+
+<!-- Instances -->
+<div class="section instance-section">
+  <div class="section-header">
+    <h3>Instances</h3>
+    <span class="text-dim text-sm" id="instance-count"></span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Agent</th>
+        <th>Status</th>
+        <th>Parent</th>
+        <th>Depth</th>
+        <th>Age</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="instances-body">
+      <tr><td colspan="7" class="text-dim">Loading...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Detail Panel (hidden by default) -->
+<div class="detail-panel hidden" id="detail-panel">
+  <div class="detail-header">
+    <h2 id="detail-title">Agent Detail</h2>
+    <button class="btn btn-sm" onclick="closeDetail()">Close</button>
+  </div>
+  <div class="detail-tabs">
+    <button class="detail-tab active" data-tab="sessions" onclick="switchTab('sessions')">Sessions</button>
+    <button class="detail-tab" data-tab="telemetry" onclick="switchTab('telemetry')">Telemetry</button>
+    <button class="detail-tab" data-tab="memory" onclick="switchTab('memory')">Memory</button>
+    <button class="detail-tab" data-tab="credentials" onclick="switchTab('credentials')">Credentials</button>
+  </div>
+  <div class="detail-content">
+    <div id="tab-sessions" class="tab-pane active"></div>
+    <div id="tab-telemetry" class="tab-pane"></div>
+    <div id="tab-memory" class="tab-pane"></div>
+    <div id="tab-credentials" class="tab-pane"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+// Prevent base.html's beforeunload from shutting down the server
+window.onbeforeunload = null;
+
+let dashboardState = {};
+let selectedAgent = null;
+let detailData = null;
+let expandedSession = null;
+let refreshTimer = null;
+
+// ── State loading ───────────────────────────────────────────────
+
+async function loadState() {
+  try {
+    dashboardState = await apiCall("GET", "/api/agents/state");
+    renderOverview(dashboardState.stats);
+    renderAgentCards(dashboardState.agents);
+    renderInstances(dashboardState.instances);
+  } catch (e) {
+    console.error("Failed to load state:", e);
+  }
+}
+
+async function refreshState() {
+  try {
+    const newState = await apiCall("GET", "/api/agents/state");
+    const changed = JSON.stringify(newState.stats) !== JSON.stringify(dashboardState.stats)
+      || newState.instances.length !== dashboardState.instances.length;
+    dashboardState = newState;
+    if (changed) {
+      renderOverview(dashboardState.stats);
+      renderAgentCards(dashboardState.agents);
+      renderInstances(dashboardState.instances);
+    }
+  } catch (e) {
+    console.error("Refresh failed:", e);
+  }
+}
+
+// Start auto-refresh, pause when tab hidden
+refreshTimer = setInterval(refreshState, 5000);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  } else {
+    if (!refreshTimer) refreshTimer = setInterval(refreshState, 5000);
+    refreshState();
+  }
+});
+
+// ── Render functions ────────────────────────────────────────────
+
+function renderOverview(stats) {
+  const bar = document.getElementById("stat-bar");
+  bar.innerHTML = `
+    <div class="stat-card"><div class="stat-value">${stats.configs}</div><div class="stat-label">Agents</div></div>
+    <div class="stat-card"><div class="stat-value ${stats.active > 0 ? 'text-green' : ''}">${stats.active}</div><div class="stat-label">Active</div></div>
+    <div class="stat-card"><div class="stat-value">${stats.total_sessions}</div><div class="stat-label">Sessions</div></div>
+    <div class="stat-card"><div class="stat-value ${stats.failed > 0 ? 'text-red' : ''}">${stats.failed}</div><div class="stat-label">Failed</div></div>
+  `;
+}
+
+function renderAgentCards(agents) {
+  const grid = document.getElementById("agent-grid");
+  if (!agents || agents.length === 0) {
+    grid.innerHTML = '<div class="empty-state">No agent configs found in agents/ directory.</div>';
+    return;
+  }
+
+  grid.innerHTML = agents.map(a => {
+    if (a.error) {
+      return `<div class="agent-card">
+        <div class="agent-card-name">${a.name}</div>
+        <div class="agent-card-error">Error: ${a.error}</div>
+      </div>`;
+    }
+    const sel = selectedAgent === a.name ? " selected" : "";
+    const activeLabel = a.active_count > 0
+      ? `<span class="text-green">${a.active_count} active</span>`
+      : "";
+    return `<div class="agent-card${sel}" onclick="selectAgent('${a.name}')">
+      <div class="agent-card-name">${a.name}</div>
+      <div class="agent-card-desc">${a.description || ''}</div>
+      <div class="agent-card-meta">
+        <span class="type-badge ${a.type}">${a.type}</span>
+        <span class="text-dim">${a.session_count} sessions</span>
+        <span class="text-dim">${a.instance_count} inst.</span>
+        ${activeLabel}
+      </div>
+      ${a.delegates && a.delegates.length > 0
+        ? `<div class="agent-card-meta mt-2"><span class="text-muted">delegates: ${a.delegates.join(", ")}</span></div>`
+        : ""}
+    </div>`;
+  }).join("");
+}
+
+function renderInstances(instances) {
+  const tbody = document.getElementById("instances-body");
+  const count = document.getElementById("instance-count");
+  count.textContent = `${instances.length} total`;
+
+  if (!instances || instances.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="text-dim">No instances registered.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = instances.map(i => {
+    const statusCls = `status-${i.status}`;
+    const parent = i.parent_id || "-";
+    const age = formatAge(i.created_at);
+    const actions = [];
+    if (i.status === "active" || i.status === "stale") {
+      actions.push(`<button class="btn btn-danger btn-sm" onclick="removeInstance('${i.instance_id}')">Remove</button>`);
+    } else {
+      actions.push(`<button class="btn btn-sm" onclick="removeInstance('${i.instance_id}')">Remove</button>`);
+    }
+    return `<tr>
+      <td style="font-family:var(--font);font-size:12px">${i.instance_id}</td>
+      <td>${i.name}</td>
+      <td><span class="status ${statusCls}"><span class="status-dot"></span>${i.status}</span></td>
+      <td class="text-dim">${parent}</td>
+      <td class="text-dim">${i.depth}</td>
+      <td class="text-dim">${age}</td>
+      <td>${actions.join(" ")}</td>
+    </tr>`;
+  }).join("");
+}
+
+// ── Detail panel ────────────────────────────────────────────────
+
+async function selectAgent(name) {
+  if (selectedAgent === name) {
+    closeDetail();
+    return;
+  }
+  selectedAgent = name;
+  expandedSession = null;
+
+  // Update card selection
+  document.querySelectorAll(".agent-card").forEach(c => c.classList.remove("selected"));
+  const cards = document.querySelectorAll(".agent-card");
+  cards.forEach(c => {
+    if (c.querySelector(".agent-card-name")?.textContent === name) {
+      c.classList.add("selected");
+    }
+  });
+
+  const panel = document.getElementById("detail-panel");
+  panel.classList.remove("hidden");
+  document.getElementById("detail-title").textContent = name;
+
+  // Show loading
+  document.getElementById("tab-sessions").innerHTML = '<div class="text-dim">Loading...</div>';
+
+  try {
+    detailData = await apiCall("GET", `/api/agents/${name}/detail`);
+    if (!detailData.ok) {
+      document.getElementById("tab-sessions").innerHTML =
+        `<div class="text-red">Error: ${detailData.error}</div>`;
+      return;
+    }
+    switchTab("sessions");
+    renderSessions(detailData.sessions);
+    renderTelemetry(detailData.telemetry);
+    renderMemory(detailData.memory);
+    renderCredentials(detailData.credentials);
+  } catch (e) {
+    document.getElementById("tab-sessions").innerHTML =
+      `<div class="text-red">Failed to load: ${e.message}</div>`;
+  }
+}
+
+function closeDetail() {
+  selectedAgent = null;
+  expandedSession = null;
+  detailData = null;
+  document.getElementById("detail-panel").classList.add("hidden");
+  document.querySelectorAll(".agent-card").forEach(c => c.classList.remove("selected"));
+}
+
+function switchTab(tab) {
+  document.querySelectorAll(".detail-tab").forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+  document.querySelector(`.detail-tab[data-tab="${tab}"]`).classList.add("active");
+  document.getElementById(`tab-${tab}`).classList.add("active");
+}
+
+function renderSessions(sessions) {
+  const el = document.getElementById("tab-sessions");
+  if (!sessions || sessions.length === 0) {
+    el.innerHTML = '<div class="empty-state">No sessions found.</div>';
+    return;
+  }
+
+  el.innerHTML = sessions.map(s => {
+    const age = formatAge(s.updated_at);
+    return `<div class="session-row" onclick="toggleSession('${s.session_id}')">
+      <div class="session-title">${s.title}</div>
+      <div class="session-meta">
+        ${s.session_id} · ${s.message_count} messages · ${age}
+        <button class="btn btn-danger btn-sm" style="float:right;margin-top:-4px"
+                onclick="event.stopPropagation(); deleteSession('${selectedAgent}', '${s.session_id}')">Delete</button>
+      </div>
+      <div id="session-preview-${s.session_id}"></div>
+    </div>`;
+  }).join("");
+}
+
+async function toggleSession(sessionId) {
+  const el = document.getElementById(`session-preview-${sessionId}`);
+  if (expandedSession === sessionId) {
+    el.innerHTML = "";
+    expandedSession = null;
+    return;
+  }
+  expandedSession = sessionId;
+
+  el.innerHTML = '<div class="text-dim" style="padding:8px 0">Loading messages...</div>';
+
+  try {
+    const data = await apiCall("GET", `/api/agents/${selectedAgent}/sessions/${sessionId}`);
+    if (!data.ok) {
+      el.innerHTML = `<div class="text-red" style="padding:8px 0">${data.error}</div>`;
+      return;
+    }
+
+    const msgs = data.messages.filter(m => m.type !== "system");
+    if (msgs.length === 0) {
+      el.innerHTML = '<div class="empty-state">No messages.</div>';
+      return;
+    }
+
+    el.innerHTML = `<div class="msg-preview">${msgs.map(m => {
+      let content = m.content || "";
+      if (m.tool_names && m.tool_names.length > 0) {
+        content = `[calls: ${m.tool_names.join(", ")}]`;
+      }
+      if (m.type === "tool_result" && m.name) {
+        content = `[${m.name}] ${content}`;
+      }
+      return `<div class="msg-item">
+        <div class="msg-role msg-role-${m.type}">${m.type}</div>
+        <div class="msg-content">${escapeHtml(content)}</div>
+      </div>`;
+    }).join("")}</div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="text-red" style="padding:8px 0">Failed: ${e.message}</div>`;
+  }
+}
+
+function renderTelemetry(telemetry) {
+  const el = document.getElementById("tab-telemetry");
+  if (!telemetry || !telemetry.available) {
+    el.innerHTML = '<div class="empty-state">No telemetry data collected yet.</div>';
+    return;
+  }
+
+  const totalTokens = telemetry.input_tokens + telemetry.output_tokens;
+  const durationMin = (telemetry.total_duration_ms / 60000).toFixed(1);
+
+  el.innerHTML = `
+    <div class="stats-grid">
+      <div class="mini-stat"><div class="mini-stat-value">${telemetry.sessions}</div><div class="mini-stat-label">Sessions</div></div>
+      <div class="mini-stat"><div class="mini-stat-value">${telemetry.turns}</div><div class="mini-stat-label">Turns</div></div>
+      <div class="mini-stat"><div class="mini-stat-value">${telemetry.tool_calls}</div><div class="mini-stat-label">Tool Calls</div></div>
+      <div class="mini-stat"><div class="mini-stat-value">${telemetry.llm_calls}</div><div class="mini-stat-label">LLM Calls</div></div>
+      <div class="mini-stat"><div class="mini-stat-value ${telemetry.errors > 0 ? 'text-red' : ''}">${telemetry.errors}</div><div class="mini-stat-label">Errors</div></div>
+      <div class="mini-stat"><div class="mini-stat-value">${formatNumber(totalTokens)}</div><div class="mini-stat-label">Total Tokens</div></div>
+      <div class="mini-stat"><div class="mini-stat-value">${formatNumber(telemetry.input_tokens)}</div><div class="mini-stat-label">Input Tokens</div></div>
+      <div class="mini-stat"><div class="mini-stat-value">${formatNumber(telemetry.output_tokens)}</div><div class="mini-stat-label">Output Tokens</div></div>
+      <div class="mini-stat"><div class="mini-stat-value">${durationMin}m</div><div class="mini-stat-label">Total Time</div></div>
+    </div>
+  `;
+}
+
+function renderMemory(memory) {
+  const el = document.getElementById("tab-memory");
+  if (!memory || !memory.available) {
+    el.innerHTML = '<div class="empty-state">No memory database found for this agent.</div>';
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="stats-grid">
+      <div class="mini-stat"><div class="mini-stat-value">${memory.entities}</div><div class="mini-stat-label">Entities</div></div>
+      <div class="mini-stat"><div class="mini-stat-value">${memory.edges}</div><div class="mini-stat-label">Relationships</div></div>
+      <div class="mini-stat"><div class="mini-stat-value">${memory.episodes}</div><div class="mini-stat-label">Episodes</div></div>
+    </div>
+  `;
+}
+
+function renderCredentials(credentials) {
+  const el = document.getElementById("tab-credentials");
+  if (!credentials || credentials.length === 0) {
+    el.innerHTML = '<div class="empty-state">No stored credentials for this agent.</div>';
+    return;
+  }
+
+  el.innerHTML = `
+    <p class="text-dim text-sm mb-4">Stored credential names (values are encrypted and not shown).</p>
+    ${credentials.map(c => `
+      <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
+        <span class="status status-ok"><span class="status-dot"></span></span> ${c}
+      </div>
+    `).join("")}
+  `;
+}
+
+// ── Actions ─────────────────────────────────────────────────────
+
+async function cleanup(mode) {
+  const labels = { stale: "stale", completed: "completed/failed", all: "ALL" };
+  if (mode === "all" && !confirm("Remove ALL registry entries?")) return;
+
+  try {
+    const res = await apiCall("POST", "/api/agents/cleanup", { mode });
+    toast(`Removed ${res.removed} ${labels[mode]} instance(s)`);
+    await loadState();
+    if (selectedAgent) selectAgent(selectedAgent);
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+async function removeInstance(id) {
+  try {
+    await apiCall("POST", "/api/agents/remove-instance", { instance_id: id });
+    toast(`Removed ${id}`);
+    await loadState();
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+async function deleteSession(agent, sessionId) {
+  if (!confirm(`Delete session ${sessionId}?`)) return;
+  try {
+    await apiCall("POST", `/api/agents/${agent}/delete-session`, { session_id: sessionId });
+    toast(`Deleted session ${sessionId}`);
+    if (selectedAgent === agent) selectAgent(agent);
+    await loadState();
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+// ── Utilities ───────────────────────────────────────────────────
+
+function formatAge(isoString) {
+  const now = Date.now();
+  const then = new Date(isoString).getTime();
+  const diff = now - then;
+  const secs = Math.floor(diff / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function formatNumber(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
+  if (n >= 1000) return (n / 1000).toFixed(1) + "k";
+  return String(n);
+}
+
+function escapeHtml(text) {
+  const d = document.createElement("div");
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+// ── Init ────────────────────────────────────────────────────────
+
+loadState();
+{% endblock %}

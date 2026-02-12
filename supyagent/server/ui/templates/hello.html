@@ -1,0 +1,1095 @@
+{% extends "base.html" %}
+
+{% block title %}supyagent — Setup{% endblock %}
+
+{% block extra_css %}
+.wizard-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 32px;
+  min-height: 70vh;
+}
+
+/* Sidebar progress */
+.sidebar { position: sticky; top: 40px; align-self: start; }
+.step-list { list-style: none; }
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: 13px;
+}
+.step-item:hover { background: var(--surface); }
+.step-item.active { background: var(--surface); color: var(--accent); font-weight: 600; }
+.step-item.complete { color: var(--green); }
+.step-item.pending { color: var(--text-muted); }
+.step-dot {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.step-item.active .step-dot { border-color: var(--accent); color: var(--accent); }
+.step-item.complete .step-dot { border-color: var(--green); background: var(--green); color: #000; }
+
+/* Content area */
+.step-content { display: none; }
+.step-content.active { display: block; }
+
+/* Step nav */
+.step-nav {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* Service step */
+.device-code-box {
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 24px;
+  text-align: center;
+  margin: 16px 0;
+}
+.device-code {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: var(--accent);
+}
+.poll-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* Integration list */
+.integration-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.integration-item:last-child { border-bottom: none; }
+
+/* Profile cards */
+.profile-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+/* Goals textarea */
+.goals-textarea {
+  width: 100%;
+  min-height: 120px;
+  font-size: 14px;
+}
+
+/* Add model form */
+.add-model-form { display: flex; gap: 8px; }
+.add-model-form input { flex: 1; }
+
+/* Summary */
+.summary-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  font-size: 14px;
+}
+.check { color: var(--green); }
+.cross { color: var(--text-muted); }
+
+@media (max-width: 700px) {
+  .wizard-layout { grid-template-columns: 1fr; }
+  .sidebar { position: static; }
+  .profile-cards { grid-template-columns: 1fr; }
+}
+{% endblock %}
+
+{% block content %}
+<h1>Welcome to Supyagent</h1>
+<p class="subtitle">Let's set up your workspace. This takes about a minute.</p>
+
+<div class="wizard-layout">
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <ul class="step-list" id="step-list">
+      <li class="step-item active" data-step="1" onclick="goToStep(1)">
+        <span class="step-dot">1</span> Connect Services
+      </li>
+      <li class="step-item pending" data-step="2" onclick="goToStep(2)">
+        <span class="step-dot">2</span> Set Up Models
+      </li>
+      <li class="step-item pending" data-step="3" onclick="goToStep(3)">
+        <span class="step-dot">3</span> Workspace Profile
+      </li>
+      <li class="step-item pending" data-step="4" onclick="goToStep(4)">
+        <span class="step-dot">4</span> Define Goals
+      </li>
+      <li class="step-item pending" data-step="5" onclick="goToStep(5)">
+        <span class="step-dot">5</span> Settings
+      </li>
+    </ul>
+  </nav>
+
+  <!-- Steps -->
+  <main>
+    <!-- Step 1: Connect Services -->
+    <div class="step-content active" id="step-1">
+      <div class="section">
+        <h2>Connect to Services</h2>
+        <p class="text-dim mb-4">
+          Supyagent Service gives your agents access to Gmail, Slack, GitHub, Discord,
+          Google Calendar, and more.
+        </p>
+
+        <div id="service-status"></div>
+
+        <div id="service-connect-area">
+          <button class="btn btn-primary" id="service-connect-btn"
+                  onclick="startServiceConnect()">Connect to Supyagent Service</button>
+        </div>
+
+        <div id="device-code-area" class="hidden">
+          <div class="device-code-box">
+            <div class="text-dim text-sm mb-2">Your verification code:</div>
+            <div class="device-code" id="device-code-display"></div>
+            <button class="btn btn-sm mt-2" id="copy-code-btn" onclick="copyDeviceCode()">
+              Copy to clipboard
+            </button>
+          </div>
+          <p class="text-dim text-sm mt-4" style="text-align:center">
+            A window will open to <strong>Supyagent Cloud</strong>.
+            Paste the code above to authorize this device.
+          </p>
+          <div style="text-align:center" class="mt-2">
+            <button class="btn btn-primary" id="open-cloud-btn" onclick="openCloudAndPoll()">
+              Open Supyagent Cloud
+            </button>
+          </div>
+          <div class="poll-status hidden mt-4" id="poll-status">
+            <span class="spinner"></span> Waiting for authorization...
+          </div>
+        </div>
+
+        <!-- Integrations (shown after service connected) -->
+        <div id="integrations-area" class="hidden mt-4">
+          <h3 class="mt-4">Integrations</h3>
+          <div id="integrations-list"></div>
+        </div>
+      </div>
+
+      <div class="step-nav">
+        <div></div>
+        <div class="btn-group">
+          <button class="btn" onclick="skipStep(1)">Skip</button>
+          <button class="btn btn-primary" onclick="completeStep(1)">Next</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2: Set Up Models -->
+    <div class="step-content" id="step-2">
+      <div class="section">
+        <h2>Set Up Models</h2>
+
+        <div id="env-keys-banner" class="hidden mb-4">
+          <div class="card">
+            <p class="mb-2">Found API keys in your environment:</p>
+            <div id="env-keys-list"></div>
+            <button class="btn btn-primary btn-sm mt-2" onclick="importEnvKeys()">
+              Import All
+            </button>
+          </div>
+        </div>
+
+        <div id="providers-list"></div>
+      </div>
+
+      <!-- Custom model input -->
+      <div class="section">
+        <h3>Custom Model</h3>
+        <p class="text-dim text-sm mb-2">
+          Add any LiteLLM-compatible model string (e.g. <code>ollama/llama3</code>,
+          <code>together_ai/meta-llama/Llama-3-70b</code>).
+        </p>
+        <div class="add-model-form">
+          <input type="text" id="wizard-custom-model"
+                 placeholder="provider/model-name">
+          <button class="btn btn-primary btn-sm" onclick="addCustomModel()">Add</button>
+        </div>
+        <!-- Inline key prompt for custom models -->
+        <div id="wizard-key-prompt" class="hidden mt-2">
+          <div class="card">
+            <p class="mb-2" id="wizard-key-prompt-label"></p>
+            <div id="wizard-key-env-row" class="mb-2 hidden">
+              <label>Environment variable name</label>
+              <input type="text" id="wizard-key-env-name"
+                     placeholder="e.g. MY_PROVIDER_API_KEY">
+            </div>
+            <label id="wizard-key-value-label">API Key</label>
+            <div class="input-row">
+              <input type="password" id="wizard-key-value" class="grow"
+                     placeholder="Enter API key value...">
+              <button class="btn btn-primary btn-sm" onclick="saveWizardKey()">Save Key</button>
+              <button class="btn btn-sm" onclick="dismissWizardKeyPrompt()">Skip</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Embedded model management -->
+      <div class="section">
+        <div class="section-header">
+          <h3>Registered Models</h3>
+          <button id="wizard-verify-all-btn" class="btn btn-sm" onclick="verifyAllWizard()">Verify All</button>
+        </div>
+        <table>
+          <thead>
+            <tr><th>Model</th><th>Provider</th><th>Key</th><th></th></tr>
+          </thead>
+          <tbody id="wizard-models-body">
+            <tr><td colspan="4" class="text-dim">No models yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="step-nav">
+        <button class="btn" onclick="goToStep(1)">Back</button>
+        <div class="btn-group">
+          <button class="btn" onclick="skipStep(2)">Skip</button>
+          <button class="btn btn-primary" onclick="completeStep(2)">Next</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: Workspace Profile -->
+    <div class="step-content" id="step-3">
+      <div class="section">
+        <h2>Workspace Profile</h2>
+        <p class="text-dim mb-4">
+          Choose a set of agents to install. You can always add more later.
+        </p>
+        <div class="profile-cards" id="profile-cards"></div>
+      </div>
+
+      <div class="step-nav">
+        <button class="btn" onclick="goToStep(2)">Back</button>
+        <button class="btn btn-primary" onclick="installProfile()">Install &amp; Next</button>
+      </div>
+    </div>
+
+    <!-- Step 4: Define Goals -->
+    <div class="step-content" id="step-4">
+      <div class="section">
+        <h2>Define Goals</h2>
+        <p class="text-dim mb-4">
+          What do you want to achieve? This becomes your GOALS.md —
+          your agent reads it on every conversation.
+        </p>
+        <textarea class="goals-textarea" id="goals-input"
+                  placeholder="Build a REST API for user management&#10;Add authentication with JWT&#10;Write comprehensive tests"></textarea>
+      </div>
+
+      <div class="step-nav">
+        <button class="btn" onclick="goToStep(3)">Back</button>
+        <div class="btn-group">
+          <button class="btn" onclick="skipStep(4)">Skip</button>
+          <button class="btn btn-primary" onclick="saveGoals()">Next</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 5: Settings -->
+    <div class="step-content" id="step-5">
+      <div class="section">
+        <h2>Settings</h2>
+
+        <h3>Execution Mode</h3>
+        <div class="profile-cards mb-4">
+          <div class="radio-card selected" data-exec="yolo" onclick="selectExecMode('yolo')">
+            <div class="radio-card-title">YOLO</div>
+            <div class="radio-card-desc">Agent runs commands freely (Recommended)</div>
+          </div>
+          <div class="radio-card" data-exec="isolated" onclick="selectExecMode('isolated')">
+            <div class="radio-card-title">Isolated</div>
+            <div class="radio-card-desc">Agent runs in Docker container</div>
+          </div>
+        </div>
+
+        <h3>Heartbeat</h3>
+        <div class="flex items-center gap-4 mb-2">
+          <label style="margin:0; cursor:pointer;">
+            <input type="checkbox" id="heartbeat-toggle"> Enable heartbeat
+            <span class="text-dim text-sm">(sleep &rarr; wake &rarr; execute &rarr; sleep)</span>
+          </label>
+        </div>
+        <div id="heartbeat-interval-row" class="hidden mt-2">
+          <label>Interval</label>
+          <input type="text" id="heartbeat-interval" value="5m" style="width:100px;">
+        </div>
+      </div>
+
+      <div class="step-nav">
+        <button class="btn" onclick="goToStep(4)">Back</button>
+        <button class="btn btn-primary" onclick="saveSettings()">Finish Setup</button>
+      </div>
+    </div>
+
+    <!-- Summary (replaces step 5 after save) -->
+    <div class="step-content" id="step-summary">
+      <div class="section">
+        <h2>Workspace Ready</h2>
+        <div id="summary-items"></div>
+      </div>
+
+      <div class="step-nav">
+        <div></div>
+        <div class="btn-group">
+          <button class="btn" onclick="finishWizard(false)">Exit</button>
+          <button class="btn btn-primary" id="start-chat-btn"
+                  onclick="finishWizard(true)">Start Chatting</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+// ── Wizard State ──────────────────────────────────────────────────
+let currentStep = 1;
+const stepStatus = { 1: "active", 2: "pending", 3: "pending", 4: "pending", 5: "pending" };
+let wizardState = {};
+let selectedProfile = "coding";
+let selectedExecMode = "yolo";
+let pollTimer = null;
+let installedAgents = [];
+
+// ── Navigation ────────────────────────────────────────────────────
+function goToStep(n) {
+  currentStep = n;
+  document.querySelectorAll(".step-content").forEach(el => el.classList.remove("active"));
+  const target = document.getElementById(`step-${n}`);
+  if (target) target.classList.add("active");
+
+  if (stepStatus[n] === "pending") stepStatus[n] = "active";
+  updateSidebar();
+
+  // Load data for the step
+  if (n === 1) loadIntegrations();
+  if (n === 2) { loadProviders(); loadWizardModels(); }
+  if (n === 3) loadProfiles();
+}
+
+function completeStep(n) {
+  stepStatus[n] = "complete";
+  if (n === 1) stopIntegrationPolling();
+  updateSidebar();
+  goToStep(n + 1);
+}
+
+function skipStep(n) {
+  stepStatus[n] = "complete";
+  if (n === 1) stopIntegrationPolling();
+  updateSidebar();
+  goToStep(n + 1);
+}
+
+function updateSidebar() {
+  document.querySelectorAll(".step-item").forEach(el => {
+    const step = parseInt(el.dataset.step);
+    const status = stepStatus[step] || "pending";
+    el.className = `step-item ${status}`;
+    const dot = el.querySelector(".step-dot");
+    dot.textContent = status === "complete" ? "\u2713" : step;
+  });
+}
+
+// ── Step 1: Service ───────────────────────────────────────────────
+async function loadInitialState() {
+  wizardState = await apiCall("GET", "/api/hello/state");
+
+  if (wizardState.service_connected) {
+    document.getElementById("service-status").innerHTML =
+      `<p class="text-green mb-2">\u2713 Already connected to Supyagent Service</p>`;
+    document.getElementById("service-connect-btn").textContent = "Reconnect";
+    loadIntegrations();
+  }
+
+  if (wizardState.env_keys && Object.keys(wizardState.env_keys).length > 0) {
+    document.getElementById("env-keys-banner").classList.remove("hidden");
+    const list = document.getElementById("env-keys-list");
+    list.innerHTML = Object.entries(wizardState.env_keys)
+      .map(([k, v]) => `<span class="badge badge-role">${k}</span> `)
+      .join("");
+  }
+}
+
+// Stored device code data for the "Open Supyagent Cloud" button
+let pendingDeviceAuth = null;
+
+async function startServiceConnect() {
+  const btn = document.getElementById("service-connect-btn");
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span> Generating code...`;
+
+  try {
+    const data = await apiCall("POST", "/api/hello/service/start", {});
+    if (!data.ok) {
+      toast(data.error || "Could not reach service", "error");
+      btn.disabled = false;
+      btn.textContent = "Try Again";
+      return;
+    }
+
+    // Store for later use
+    pendingDeviceAuth = {
+      baseUrl: data.base_url,
+      deviceCode: data.device_code,
+      interval: data.interval || 5,
+      verifyUrl: data.verification_uri || "https://app.supyagent.com/device",
+    };
+
+    document.getElementById("service-connect-area").classList.add("hidden");
+    document.getElementById("device-code-area").classList.remove("hidden");
+    document.getElementById("device-code-display").textContent = data.user_code;
+
+    // Don't open browser or poll yet — let the user click "Open Supyagent Cloud"
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+    btn.disabled = false;
+    btn.textContent = "Try Again";
+  }
+}
+
+function copyDeviceCode() {
+  const code = document.getElementById("device-code-display").textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    const btn = document.getElementById("copy-code-btn");
+    btn.textContent = "Copied!";
+    setTimeout(() => { btn.textContent = "Copy to clipboard"; }, 2000);
+  });
+}
+
+function openCloudAndPoll() {
+  if (!pendingDeviceAuth) return;
+
+  // Copy code to clipboard automatically
+  const code = document.getElementById("device-code-display").textContent;
+  navigator.clipboard.writeText(code).catch(() => {});
+
+  // Open the cloud dashboard
+  window.open(pendingDeviceAuth.verifyUrl, "_blank");
+
+  // Show polling status and hide the button
+  document.getElementById("open-cloud-btn").classList.add("hidden");
+  document.getElementById("poll-status").classList.remove("hidden");
+
+  // Start polling
+  startPolling(
+    pendingDeviceAuth.baseUrl,
+    pendingDeviceAuth.deviceCode,
+    pendingDeviceAuth.interval,
+  );
+}
+
+function startPolling(baseUrl, deviceCode, interval) {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await apiCall("POST", "/api/hello/service/poll", {
+        base_url: baseUrl,
+        device_code: deviceCode,
+        interval,
+      });
+
+      if (res.status === "approved") {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        document.getElementById("device-code-area").classList.add("hidden");
+        document.getElementById("service-status").innerHTML =
+          `<p class="text-green mb-2">\u2713 Connected to Supyagent Service!</p>`;
+        document.getElementById("service-connect-area").classList.remove("hidden");
+        document.getElementById("service-connect-btn").textContent = "Reconnect";
+        document.getElementById("service-connect-btn").disabled = false;
+        wizardState.service_connected = true;
+        loadIntegrations();
+        toast("Connected to Supyagent Service!");
+      } else if (res.status === "denied" || res.status === "expired") {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        document.getElementById("poll-status").innerHTML =
+          `<span class="text-red">${res.error}</span>`;
+        setTimeout(() => {
+          document.getElementById("device-code-area").classList.add("hidden");
+          document.getElementById("service-connect-area").classList.remove("hidden");
+          document.getElementById("service-connect-btn").textContent = "Try Again";
+          document.getElementById("service-connect-btn").disabled = false;
+        }, 2000);
+      }
+    } catch (e) {
+      // Network error during poll — keep trying
+    }
+  }, (interval || 5) * 1000);
+}
+
+let integrationPollTimer = null;
+
+async function loadIntegrations() {
+  if (!wizardState.service_connected) return;
+  try {
+    const data = await apiCall("GET", "/api/hello/integrations");
+    const area = document.getElementById("integrations-area");
+    area.classList.remove("hidden");
+    const list = document.getElementById("integrations-list");
+    const connectedCount = data.integrations.filter(i => i.connected).length;
+    const total = data.integrations.length;
+
+    list.innerHTML = data.integrations.map(i => {
+      let statusHtml;
+      if (i.connected) {
+        statusHtml = `<span class="status status-ok"><span class="status-dot"></span>connected</span>`;
+      } else if (document.querySelector(`[data-pending="${i.id}"]`)) {
+        // Keep the pending state for items being connected
+        statusHtml = `<span class="status status-warn" data-pending="${i.id}">
+          <span class="spinner"></span> waiting...
+        </span>`;
+      } else {
+        statusHtml = `<button class="btn btn-sm" onclick="connectIntegration('${i.id}')">Connect</button>`;
+      }
+      return `
+        <div class="integration-item">
+          <div>
+            <div style="font-weight:600">${i.name}</div>
+            <div class="text-dim text-sm">${i.description}</div>
+          </div>
+          ${statusHtml}
+        </div>`;
+    }).join("");
+
+    // Show connection summary
+    const header = document.querySelector("#integrations-area h3");
+    if (header) {
+      header.innerHTML = `Integrations <span class="text-dim text-sm">(${connectedCount}/${total} connected)</span>`;
+    }
+  } catch (e) {
+    // Service not reachable
+  }
+}
+
+async function connectIntegration(provider) {
+  try {
+    const data = await apiCall("POST", "/api/hello/integrations/connect", { provider });
+    if (data.ok) {
+      window.open(data.url, "_blank");
+
+      // Show pending state for this provider
+      const items = document.querySelectorAll(".integration-item");
+      items.forEach(item => {
+        const nameEl = item.querySelector("[style*='font-weight']");
+        if (nameEl) {
+          const btn = item.querySelector(".btn");
+          if (btn && btn.textContent === "Connect") {
+            // Check if this is the right item by provider name match
+            // Replace button with spinner for the clicked provider
+          }
+        }
+      });
+
+      toast(`Opening browser to connect — come back when done`);
+
+      // Start auto-refresh polling to detect when the integration connects
+      startIntegrationPolling();
+    }
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+function startIntegrationPolling() {
+  // Poll every 5 seconds for up to 5 minutes to detect newly connected integrations
+  if (integrationPollTimer) clearInterval(integrationPollTimer);
+  let pollCount = 0;
+  const maxPolls = 60; // 5 min at 5s intervals
+  integrationPollTimer = setInterval(async () => {
+    pollCount++;
+    if (pollCount > maxPolls) {
+      clearInterval(integrationPollTimer);
+      integrationPollTimer = null;
+      return;
+    }
+    await loadIntegrations();
+  }, 5000);
+}
+
+function stopIntegrationPolling() {
+  if (integrationPollTimer) {
+    clearInterval(integrationPollTimer);
+    integrationPollTimer = null;
+  }
+}
+
+// ── Step 2: Models ────────────────────────────────────────────────
+let wizardVerifyStatus = {}; // { model: "verified" | "error" | "unverified" | "missing" }
+
+async function loadProviders() {
+  try {
+    const data = await apiCall("GET", "/api/hello/providers");
+    const el = document.getElementById("providers-list");
+    el.innerHTML = data.providers.map(p => {
+      const statusIcon = p.has_key ? `<span class="text-green">\u2713</span>` : "";
+      const models = p.models.map(m =>
+        `<button class="btn btn-sm mt-2" onclick="quickAddModel('${m.id}', '${p.key_name}')"
+           title="${m.description}">${m.id.split("/").pop()}</button>`
+      ).join(" ");
+      return `
+        <div class="card mb-2">
+          <div class="section-header" style="margin-bottom:8px">
+            <span style="font-weight:600">${p.name} ${statusIcon}</span>
+            ${!p.has_key ? `<button class="btn btn-sm" onclick="promptProviderKey('${p.key_name}')">Set API Key</button>` : ""}
+          </div>
+          <div>${models}</div>
+        </div>`;
+    }).join("");
+  } catch (e) {}
+}
+
+async function promptProviderKey(keyName) {
+  const value = prompt(`Enter ${keyName}:`);
+  if (!value) return;
+  try {
+    await apiCall("POST", "/api/keys/set", { key_name: keyName, value: value.trim() });
+    toast(`Saved ${keyName}`);
+    loadProviders();
+    loadWizardModels();
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+async function quickAddModel(modelId, keyName) {
+  try {
+    const res = await apiCall("POST", "/api/models/add", { model: modelId });
+    toast(`Registered ${modelId}`);
+    await loadWizardModels();
+    // Auto-verify if the key is already present
+    if (res.ok && res.has_key) {
+      await verifyWizardModel(modelId);
+    }
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+async function addCustomModel() {
+  const input = document.getElementById("wizard-custom-model");
+  const model = input.value.trim();
+  if (!model) return;
+  try {
+    const res = await apiCall("POST", "/api/models/add", { model });
+    toast(`Registered ${model}`);
+    input.value = "";
+    loadProviders();
+    await loadWizardModels();
+
+    // Prompt for API key if needed
+    if (res.ok && !res.has_key) {
+      const keyToPrompt = (res.missing_keys && res.missing_keys.length > 0)
+        ? res.missing_keys[0]
+        : res.detected_key;
+      showWizardKeyPrompt(model, keyToPrompt);
+    }
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+function showWizardKeyPrompt(model, detectedKey) {
+  pendingWizardKeyModel = model;
+  const prompt = document.getElementById("wizard-key-prompt");
+  const label = document.getElementById("wizard-key-prompt-label");
+  const envRow = document.getElementById("wizard-key-env-row");
+  const valueLabel = document.getElementById("wizard-key-value-label");
+
+  prompt.classList.remove("hidden");
+
+  if (detectedKey) {
+    label.innerHTML = `<strong>${model}</strong> needs <code>${detectedKey}</code>`;
+    valueLabel.textContent = detectedKey;
+    envRow.classList.add("hidden");
+    prompt.dataset.keyName = detectedKey;
+  } else {
+    label.innerHTML = `<strong>${model}</strong> uses an unknown provider. What environment variable holds its API key?`;
+    valueLabel.textContent = "API Key value";
+    envRow.classList.remove("hidden");
+    document.getElementById("wizard-key-env-name").value = "";
+    prompt.dataset.keyName = "";
+  }
+  document.getElementById("wizard-key-value").value = "";
+  document.getElementById("wizard-key-value").focus();
+}
+
+let pendingWizardKeyModel = null;
+
+async function saveWizardKey() {
+  const prompt = document.getElementById("wizard-key-prompt");
+  let keyName = prompt.dataset.keyName;
+  const value = document.getElementById("wizard-key-value").value.trim();
+
+  if (!keyName) {
+    keyName = document.getElementById("wizard-key-env-name").value.trim();
+  }
+  if (!keyName) {
+    toast("Enter an environment variable name", "error");
+    return;
+  }
+  if (!value) {
+    toast("Enter an API key value", "error");
+    return;
+  }
+
+  try {
+    await apiCall("POST", "/api/keys/set", { key_name: keyName, value });
+    toast(`Saved ${keyName}`);
+    const modelToVerify = pendingWizardKeyModel;
+    dismissWizardKeyPrompt();
+    loadProviders();
+    await loadWizardModels();
+    // Auto-verify after saving the key
+    if (modelToVerify) {
+      await verifyWizardModel(modelToVerify);
+    }
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+function dismissWizardKeyPrompt() {
+  document.getElementById("wizard-key-prompt").classList.add("hidden");
+  pendingWizardKeyModel = null;
+}
+
+async function loadWizardModels() {
+  try {
+    const modelsData = await apiCall("GET", "/api/models/state");
+    const tbody = document.getElementById("wizard-models-body");
+    if (!modelsData.models || modelsData.models.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="4" class="text-dim">No models yet. Click a model above to add it.</td></tr>`;
+      return;
+    }
+    // Initialize verify status from state
+    modelsData.models.forEach(m => {
+      if (!(m.model in wizardVerifyStatus)) {
+        if (m.missing_keys && m.missing_keys.length > 0) {
+          wizardVerifyStatus[m.model] = "missing";
+        } else if (m.has_key) {
+          wizardVerifyStatus[m.model] = "unverified";
+        } else {
+          wizardVerifyStatus[m.model] = "missing";
+        }
+      }
+    });
+    tbody.innerHTML = modelsData.models.map(m => {
+      const vs = wizardVerifyStatus[m.model] || "unverified";
+      let statusHtml;
+      if (vs === "verified") {
+        statusHtml = `<span class="status status-ok"><span class="status-dot"></span>verified</span>`;
+      } else if (vs === "missing") {
+        const keys = (m.missing_keys && m.missing_keys.length > 0) ? m.missing_keys : [];
+        if (keys.length > 0) {
+          const parts = keys.map(k =>
+            `<code>${k}</code> <button class="btn btn-sm" onclick="showWizardKeyPrompt('${m.model}', '${k}')">Set</button>`
+          ).join(", ");
+          statusHtml = `<span class="status status-missing"><span class="status-dot"></span>missing: ${parts}</span>`;
+        } else if (m.key_name) {
+          statusHtml = `<span class="status status-missing"><span class="status-dot"></span>missing: <code>${m.key_name}</code> <button class="btn btn-sm" onclick="showWizardKeyPrompt('${m.model}', '${m.key_name}')">Set</button></span>`;
+        } else {
+          statusHtml = `<span class="status status-missing"><span class="status-dot"></span>missing <button class="btn btn-sm" onclick="showWizardKeyPrompt('${m.model}', null)">Set Key</button></span>`;
+        }
+      } else if (vs.startsWith("error:")) {
+        statusHtml = `<span class="status status-missing" title="${vs.slice(6)}"><span class="status-dot"></span>error <button class="btn btn-sm" onclick="showWizardKeyPrompt('${m.model}', null)">Set Key</button></span>`;
+      } else {
+        statusHtml = `<span class="status status-warn"><span class="status-dot"></span>unverified</span>`;
+      }
+      const badges = [];
+      if (m.is_default) badges.push(`<span class="badge badge-default">default</span>`);
+      return `
+        <tr>
+          <td>${m.model} ${badges.join(" ")}</td>
+          <td class="text-dim">${m.provider}</td>
+          <td>${statusHtml}</td>
+          <td>
+            <button class="btn btn-sm" onclick="verifyWizardModel('${m.model}')">Verify</button>
+            ${!m.is_default ? `<button class="btn btn-sm" onclick="setWizardDefault('${m.model}')">Default</button>` : ""}
+            <button class="btn btn-danger btn-sm" onclick="removeWizardModel('${m.model}')">Remove</button>
+          </td>
+        </tr>`;
+    }).join("");
+  } catch (e) {}
+}
+
+async function verifyWizardModel(model) {
+  toast(`Verifying ${model}...`);
+  try {
+    const res = await apiCall("POST", "/api/models/verify", { model });
+    if (res.status === "verified") {
+      wizardVerifyStatus[model] = "verified";
+      toast(`${model}: verified`);
+    } else if (res.status === "missing_keys") {
+      wizardVerifyStatus[model] = "missing";
+      toast(`${model}: missing keys — ${res.missing_keys.join(", ")}`, "error");
+    } else {
+      wizardVerifyStatus[model] = "error:" + (res.error || "unknown error");
+      toast(`${model}: ${res.error || "verification failed"}`, "error");
+    }
+    await loadWizardModels();
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+async function verifyAllWizard() {
+  const btn = document.getElementById("wizard-verify-all-btn");
+  btn.disabled = true;
+  btn.textContent = "Verifying...";
+  let verified = 0;
+  let total = 0;
+  try {
+    const modelsData = await apiCall("GET", "/api/models/state");
+    const toVerify = (modelsData.models || []).filter(m => wizardVerifyStatus[m.model] !== "verified");
+    total = toVerify.length;
+    for (const m of toVerify) {
+      try {
+        const res = await apiCall("POST", "/api/models/verify", { model: m.model });
+        if (res.status === "verified") {
+          wizardVerifyStatus[m.model] = "verified";
+          verified++;
+        } else if (res.status === "missing_keys") {
+          wizardVerifyStatus[m.model] = "missing";
+        } else {
+          wizardVerifyStatus[m.model] = "error:" + (res.error || "unknown error");
+        }
+      } catch (e) {
+        wizardVerifyStatus[m.model] = "error:" + e.message;
+      }
+      await loadWizardModels();
+    }
+    toast(`Verified ${verified}/${total} models`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Verify All";
+  }
+}
+
+async function setWizardDefault(model) {
+  await apiCall("POST", "/api/models/default", { model });
+  toast(`Default: ${model}`);
+  loadWizardModels();
+}
+
+async function removeWizardModel(model) {
+  await apiCall("POST", "/api/models/remove", { model });
+  toast(`Removed ${model}`);
+  loadWizardModels();
+}
+
+async function importEnvKeys() {
+  try {
+    const res = await apiCall("POST", "/api/hello/models/import-env", {});
+    if (res.imported.length > 0) {
+      toast(`Imported ${res.imported.join(", ")}`);
+      document.getElementById("env-keys-banner").classList.add("hidden");
+      loadProviders();
+    } else {
+      toast("No new keys to import");
+    }
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+// ── Step 3: Profiles ──────────────────────────────────────────────
+async function loadProfiles() {
+  try {
+    const data = await apiCall("GET", "/api/hello/profiles");
+    const grid = document.getElementById("profile-cards");
+    const recommended = { coding: true };
+    grid.innerHTML = data.profiles.map(p => `
+      <div class="radio-card ${p.name === selectedProfile ? 'selected' : ''}"
+           data-profile="${p.name}"
+           onclick="selectProfile('${p.name}')">
+        <div class="radio-card-title">
+          ${p.name.charAt(0).toUpperCase() + p.name.slice(1)}
+          ${recommended[p.name] ? ' (Recommended)' : ''}
+        </div>
+        <div class="radio-card-desc">${p.description}</div>
+        <div class="text-dim text-sm mt-2">Agents: ${p.agents.join(", ")}</div>
+      </div>
+    `).join("");
+  } catch (e) {}
+}
+
+function selectProfile(name) {
+  selectedProfile = name;
+  document.querySelectorAll("[data-profile]").forEach(el => {
+    el.classList.toggle("selected", el.dataset.profile === name);
+  });
+}
+
+async function installProfile() {
+  try {
+    const modelsState = await apiCall("GET", "/api/models/state");
+    const model = modelsState.default || null;
+    const res = await apiCall("POST", "/api/hello/profile/install", {
+      profile: selectedProfile,
+      model,
+    });
+    installedAgents = res.agents;
+    toast(`Installed ${selectedProfile} profile`);
+    completeStep(3);
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+// ── Step 4: Goals ─────────────────────────────────────────────────
+async function saveGoals() {
+  const goals = document.getElementById("goals-input").value;
+  try {
+    await apiCall("POST", "/api/hello/goals", { goals });
+    toast("Created GOALS.md");
+    completeStep(4);
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+// ── Step 5: Settings ──────────────────────────────────────────────
+function selectExecMode(mode) {
+  selectedExecMode = mode;
+  document.querySelectorAll("[data-exec]").forEach(el => {
+    el.classList.toggle("selected", el.dataset.exec === mode);
+  });
+}
+
+document.getElementById("heartbeat-toggle").addEventListener("change", e => {
+  document.getElementById("heartbeat-interval-row")
+    .classList.toggle("hidden", !e.target.checked);
+});
+
+async function saveSettings() {
+  const heartbeatEnabled = document.getElementById("heartbeat-toggle").checked;
+  const heartbeatInterval = document.getElementById("heartbeat-interval").value || "5m";
+
+  try {
+    await apiCall("POST", "/api/hello/settings", {
+      execution_mode: selectedExecMode,
+      heartbeat_enabled: heartbeatEnabled,
+      heartbeat_interval: heartbeatInterval,
+    });
+    stepStatus[5] = "complete";
+    updateSidebar();
+    showSummary();
+  } catch (e) {
+    toast(`Error: ${e.message}`, "error");
+  }
+}
+
+// ── Summary ───────────────────────────────────────────────────────
+async function showSummary() {
+  document.querySelectorAll(".step-content").forEach(el => el.classList.remove("active"));
+  document.getElementById("step-summary").classList.add("active");
+
+  const modelsState = await apiCall("GET", "/api/models/state");
+  const items = document.getElementById("summary-items");
+
+  const rows = [];
+  rows.push(summaryRow(true, `Workspace profile: ${selectedProfile}`));
+  if (installedAgents.length > 0) {
+    rows.push(summaryRow(true, `Agents: ${installedAgents.join(", ")}`));
+  }
+  if (modelsState.default) {
+    rows.push(summaryRow(true, `Default model: ${modelsState.default}`));
+  }
+  rows.push(summaryRow(wizardState.service_connected, wizardState.service_connected
+    ? "Service connected" : "Service not connected"));
+  rows.push(summaryRow(true, `Mode: ${selectedExecMode}`));
+  rows.push(summaryRow(true, "GOALS.md created"));
+  items.innerHTML = rows.join("");
+
+  // Update start chat button
+  const mainAgent = installedAgents.includes("assistant")
+    ? "assistant"
+    : (installedAgents[0] || null);
+  const chatBtn = document.getElementById("start-chat-btn");
+  if (mainAgent) {
+    chatBtn.textContent = `Start Chatting with ${mainAgent}`;
+    chatBtn.dataset.agent = mainAgent;
+  } else {
+    chatBtn.classList.add("hidden");
+  }
+}
+
+function summaryRow(ok, text) {
+  const icon = ok ? `<span class="check">\u2713</span>` : `<span class="cross">\u25cb</span>`;
+  return `<div class="summary-item">${icon} ${text}</div>`;
+}
+
+async function finishWizard(startChat) {
+  const agentName = document.getElementById("start-chat-btn").dataset.agent || "assistant";
+  try {
+    await apiCall("POST", "/api/hello/finish", {
+      start_chat: startChat,
+      agent_name: agentName,
+    });
+  } catch (e) {}
+
+  if (startChat) {
+    document.querySelector(".step-content.active").innerHTML = `
+      <div class="section" style="text-align:center; padding:48px">
+        <h2>Starting chat...</h2>
+        <p class="text-dim mt-2">You can close this tab. Run <code>supyagent chat ${agentName}</code> in your terminal.</p>
+      </div>`;
+  } else {
+    document.querySelector(".step-content.active").innerHTML = `
+      <div class="section" style="text-align:center; padding:48px">
+        <h2>Setup Complete</h2>
+        <p class="text-dim mt-2">
+          Start chatting: <code>supyagent chat</code><br>
+          Manage models: <code>supyagent models</code><br>
+          Check setup: <code>supyagent doctor</code>
+        </p>
+        <p class="text-dim mt-4 text-sm">You can close this tab.</p>
+      </div>`;
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────
+document.getElementById("wizard-custom-model").addEventListener("keydown", e => {
+  if (e.key === "Enter") addCustomModel();
+});
+document.getElementById("wizard-key-value").addEventListener("keydown", e => {
+  if (e.key === "Enter") saveWizardKey();
+});
+document.getElementById("wizard-key-env-name").addEventListener("keydown", e => {
+  if (e.key === "Enter") document.getElementById("wizard-key-value").focus();
+});
+
+loadInitialState();
+{% endblock %}

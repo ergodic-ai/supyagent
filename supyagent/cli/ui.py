@@ -200,7 +200,7 @@ def create_chat_session(agent_name: str) -> PromptSession | None:
             auto_suggest=AutoSuggestFromHistory(),
             enable_history_search=True,
             complete_while_typing=True,
-            multiline=False,
+            multiline=True,
         )
     except Exception:
         return None

@@ -145,6 +145,10 @@ class TestSkillKey:
         tool = _make_tool("slack_send", "Send.", "slack", service="messages")
         assert _skill_key(tool) == "slack"
 
+    def test_google_slides_splits_by_service(self):
+        tool = _make_tool("slides_get_presentation", "Get presentation.", "google", service="slides")
+        assert _skill_key(tool) == "slides"
+
     def test_google_falls_back_to_provider(self):
         tool = _make_tool("google_tool", "Do.", "google")
         # service defaults to "test" in _make_tool, so it returns "test"
@@ -161,6 +165,7 @@ class TestSkillDisplayName:
         assert _skill_display_name("gmail") == "Gmail"
         assert _skill_display_name("calendar") == "Google Calendar"
         assert _skill_display_name("drive") == "Google Drive"
+        assert _skill_display_name("slides") == "Google Slides"
 
     def test_provider_display_name(self):
         assert _skill_display_name("slack") == "Slack"
@@ -231,6 +236,20 @@ class TestGenerateSkillFiles:
         tools = [_make_tool("gmail_send", "Send.", "google", service="gmail")]
         files = generate_skill_files(tools)
         assert "# Gmail" in files["supy-cloud-gmail"]
+
+    def test_slides_produces_own_directory(self):
+        tools = [
+            _make_tool(
+                "slides_get_presentation", "Get presentation.", "google", service="slides"
+            ),
+            _make_tool("slides_get_page", "Get page.", "google", service="slides"),
+        ]
+        files = generate_skill_files(tools)
+        assert "supy-cloud-slides" in files
+        content = files["supy-cloud-slides"]
+        assert "# Google Slides" in content
+        assert "slides_get_presentation" in content
+        assert "slides_get_page" in content
 
     def test_multiple_providers_sorted(self):
         tools = [

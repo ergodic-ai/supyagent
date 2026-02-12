@@ -1,0 +1,14 @@
+# Lead Generation Automation Requirements
+
+# Reddit monitoring
+praw>=7.7.0
+
+# Twitter monitoring
+tweepy>=4.14.0
+
+# GitHub monitoring
+PyGithub>=2.1.1
+
+# General utilities
+requests>=2.31.0
+python-dotenv>=1.0.0

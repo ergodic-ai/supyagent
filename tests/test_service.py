@@ -323,6 +323,84 @@ class TestExecuteTool:
         assert "reach service" in result["error"].lower()
         client.close()
 
+    def test_post_merges_body_defaults(self, mock_config_manager):
+        """bodyDefaults from metadata are merged into the POST body."""
+        captured_body = {}
+
+        def handler(req):
+            captured_body.update(json.loads(req.content))
+            return httpx.Response(200, json={"ok": True})
+
+        client = self._make_client(mock_config_manager, handler)
+        result = client.execute_tool(
+            "slides_replace_all_text",
+            {"presentationId": "pres-1", "replaceText": "Acme"},
+            {
+                "method": "POST",
+                "path": "/api/v1/slides/presentations/{presentationId}",
+                "bodyDefaults": {"action": "replace_all_text"},
+            },
+        )
+        assert result["ok"] is True
+        assert captured_body["action"] == "replace_all_text"
+        assert captured_body["replaceText"] == "Acme"
+        # presentationId consumed by path substitution, should not be in body
+        assert "presentationId" not in captured_body
+        client.close()
+
+    def test_post_explicit_args_override_body_defaults(self, mock_config_manager):
+        """Explicit arguments override bodyDefaults."""
+        captured_body = {}
+
+        def handler(req):
+            captured_body.update(json.loads(req.content))
+            return httpx.Response(200, json={"ok": True})
+
+        client = self._make_client(mock_config_manager, handler)
+        result = client.execute_tool(
+            "test_tool",
+            {"action": "custom_action", "data": "value"},
+            {
+                "method": "POST",
+                "path": "/test",
+                "bodyDefaults": {"action": "default_action"},
+            },
+        )
+        assert result["ok"] is True
+        assert captured_body["action"] == "custom_action"
+        client.close()
+
+    def test_binary_response_saves_file(self, mock_config_manager, tmp_path):
+        """Non-JSON responses are saved to disk and return filePath."""
+        png_bytes = b"\x89PNG\r\n\x1a\nfake-png-content"
+
+        def handler(req):
+            return httpx.Response(
+                200,
+                content=png_bytes,
+                headers={"content-type": "image/png"},
+            )
+
+        client = self._make_client(mock_config_manager, handler)
+
+        with patch("supyagent.core.service.Path.home", return_value=tmp_path):
+            result = client.execute_tool(
+                "slides_get_thumbnail",
+                {},
+                {"method": "GET", "path": "/test/thumbnail"},
+            )
+
+        assert result["ok"] is True
+        assert result["data"]["contentType"] == "image/png"
+        assert result["data"]["size"] == len(png_bytes)
+
+        from pathlib import Path
+        saved = Path(result["data"]["filePath"])
+        assert saved.exists()
+        assert saved.read_bytes() == png_bytes
+        assert saved.suffix == ".png"
+        client.close()
+
 
 # ---------------------------------------------------------------------------
 # ServiceClient.health_check

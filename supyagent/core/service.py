@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -174,7 +175,9 @@ class ServiceClient:
             if method == "GET":
                 response = self._client.get(path, params=remaining_args)
             elif method == "POST":
-                response = self._client.post(path, json=remaining_args)
+                defaults = metadata.get("bodyDefaults", {})
+                body = {**defaults, **remaining_args}
+                response = self._client.post(path, json=body)
             elif method == "PATCH":
                 response = self._client.patch(path, json=remaining_args)
             elif method == "DELETE":
@@ -183,8 +186,13 @@ class ServiceClient:
                 return {"ok": False, "error": f"Unsupported HTTP method: {method}"}
 
             response.raise_for_status()
-            data = response.json()
-            return {"ok": True, "data": data}
+
+            content_type = response.headers.get("content-type", "")
+            if content_type.startswith("application/json") or not content_type:
+                data = response.json()
+                return {"ok": True, "data": data}
+            else:
+                return self._save_binary_response(response, content_type)
 
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
@@ -211,6 +219,29 @@ class ServiceClient:
 
         except httpx.RequestError as e:
             return {"ok": False, "error": f"Could not reach service: {e}"}
+
+    @staticmethod
+    def _save_binary_response(
+        response: httpx.Response, content_type: str
+    ) -> dict[str, Any]:
+        """Save a binary HTTP response to ~/.supyagent/tmp/ and return the path."""
+        import hashlib
+        import mimetypes
+
+        ext = mimetypes.guess_extension(content_type.split(";")[0].strip()) or ".bin"
+        digest = hashlib.sha256(response.content).hexdigest()[:12]
+        tmp_dir = Path.home() / ".supyagent" / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        file_path = tmp_dir / f"{digest}{ext}"
+        file_path.write_bytes(response.content)
+        return {
+            "ok": True,
+            "data": {
+                "filePath": str(file_path),
+                "contentType": content_type,
+                "size": len(response.content),
+            },
+        }
 
     # ------------------------------------------------------------------
     # Inbox

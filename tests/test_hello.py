@@ -64,18 +64,20 @@ def _mock_questionary_checkbox(stack, return_values):
 # Standard wizard flow selections:
 # Step 1: skip service -> "n"
 # Step 2: select Anthropic -> select Sonnet -> done adding -> (only 1 model, no default/role prompts)
-# Step 3: select "coding" profile
-# Step 4: skip goals -> ""
-# Step 5: select "yolo"
+# Step 3: env vars -> "done" (skip adding)
+# Step 4: select "coding" profile
+# Step 5: skip goals -> ""
+# Step 6: select "yolo" execution mode, heartbeat -> "n"
 # Summary: select "exit"
 
 # questionary.select calls in order for standard wizard:
 # 1. provider select: "Anthropic"
 # 2. provider select loop (done): "done"
-# 3. workspace profile: "coding"
-# 4. execution mode: "yolo"
-# 5. summary "what's next": "exit"
-STANDARD_SELECT_SEQUENCE = ["Anthropic", "done", "coding", "yolo", "exit"]
+# 3. env vars action: "done"
+# 4. workspace profile: "coding"
+# 5. execution mode: "yolo"
+# 6. summary "what's next": "exit"
+STANDARD_SELECT_SEQUENCE = ["Anthropic", "done", "done", "coding", "yolo", "exit"]
 
 # questionary.checkbox calls: one for model multi-select
 STANDARD_CHECKBOX_SEQUENCE = [["anthropic/claude-sonnet-4-5-20250929"]]
@@ -100,7 +102,7 @@ class TestHelloCommand:
                 _mock_questionary_checkbox(stack, STANDARD_CHECKBOX_SEQUENCE)
                 result = runner.invoke(
                     cli,
-                    ["hello"],
+                    ["hello", "--cli"],
                     input="n\n\nn\n",  # skip service, skip goals, no heartbeat
                 )
 
@@ -122,7 +124,7 @@ class TestHelloCommand:
                 _mock_questionary_checkbox(stack, STANDARD_CHECKBOX_SEQUENCE)
                 result = runner.invoke(
                     cli,
-                    ["hello"],
+                    ["hello", "--cli"],
                     input="n\n\nn\n",
                 )
 
@@ -147,7 +149,7 @@ class TestHelloCommand:
                 _mock_questionary_checkbox(stack, STANDARD_CHECKBOX_SEQUENCE)
                 result = runner.invoke(
                     cli,
-                    ["hello"],
+                    ["hello", "--cli"],
                     input="n\n\nn\n",
                 )
 
@@ -187,7 +189,7 @@ class TestHelloCommand:
                 _mock_questionary_checkbox(stack, STANDARD_CHECKBOX_SEQUENCE)
                 result = runner.invoke(
                     cli,
-                    ["hello"],
+                    ["hello", "--cli"],
                     # yes connect, done integrations, skip goals
                     input="y\ndone\n\nn\n",  # yes connect, done integrations, skip goals, no heartbeat
                 )
@@ -216,7 +218,7 @@ class TestHelloCommand:
                 _mock_questionary_checkbox(stack, STANDARD_CHECKBOX_SEQUENCE)
                 result = runner.invoke(
                     cli,
-                    ["hello"],
+                    ["hello", "--cli"],
                     input="y\n\nn\n",  # yes connect (fails), skip goals, no heartbeat
                 )
 
@@ -238,7 +240,7 @@ class TestHelloCommand:
                 _mock_questionary_checkbox(stack, STANDARD_CHECKBOX_SEQUENCE)
                 result = runner.invoke(
                     cli,
-                    ["hello"],
+                    ["hello", "--cli"],
                     input="n\n\nn\n",
                 )
 
@@ -261,7 +263,7 @@ class TestHelloCommand:
                 _mock_questionary_checkbox(stack, STANDARD_CHECKBOX_SEQUENCE)
                 result = runner.invoke(
                     cli,
-                    ["hello"],
+                    ["hello", "--cli"],
                     input="n\n\nn\n",
                 )
 
@@ -285,7 +287,7 @@ class TestHelloCommand:
                 _mock_questionary_checkbox(stack, STANDARD_CHECKBOX_SEQUENCE)
                 result = runner.invoke(
                     cli,
-                    ["hello"],
+                    ["hello", "--cli"],
                     input="n\nBuild a CLI tool\nn\n",  # skip service, type goals, no heartbeat
                 )
 
@@ -310,7 +312,7 @@ class TestHelloCommand:
                 _apply_patches(stack, mgr, registry)
                 # questionary.select for re-run menu: exit
                 _mock_questionary_select(stack, ["exit"])
-                result = runner.invoke(cli, ["hello"])
+                result = runner.invoke(cli, ["hello", "--cli"])
 
         assert result.exit_code == 0
 
@@ -361,7 +363,7 @@ class TestHelloCommand:
                 _mock_questionary_checkbox(stack, STANDARD_CHECKBOX_SEQUENCE)
                 result = runner.invoke(
                     cli,
-                    ["hello"],
+                    ["hello", "--cli"],
                     input="n\n\nn\n",
                 )
 
@@ -385,7 +387,7 @@ class TestHelloCommand:
                 _mock_questionary_checkbox(stack, STANDARD_CHECKBOX_SEQUENCE)
                 result = runner.invoke(
                     cli,
-                    ["hello"],
+                    ["hello", "--cli"],
                     input="n\n\nn\n",
                 )
 
@@ -398,7 +400,7 @@ class TestHelloCommand:
         mgr = _make_mgr(tmp_path)
         registry = _make_registry(tmp_path)
 
-        # Select two providers worth of models, then done, default, roles, profile, mode, exit
+        # Select two providers worth of models, then done, default, roles, env vars, profile, mode, exit
         select_seq = [
             "Anthropic",  # pick anthropic
             "OpenAI",  # pick openai too
@@ -407,6 +409,7 @@ class TestHelloCommand:
             None,  # fast role: skip
             None,  # smart role: skip
             None,  # reasoning role: skip
+            "done",  # env vars: done
             "coding",  # workspace profile
             "yolo",  # execution mode
             "exit",  # summary
@@ -425,7 +428,7 @@ class TestHelloCommand:
                 _mock_questionary_checkbox(stack, checkbox_seq)
                 result = runner.invoke(
                     cli,
-                    ["hello"],
+                    ["hello", "--cli"],
                     input="n\n\nn\n",  # skip service, skip goals, no heartbeat
                 )
 
@@ -439,7 +442,7 @@ class TestHelloCommand:
         mgr = _make_mgr(tmp_path)
         registry = _make_registry(tmp_path)
 
-        # 2 models → triggers default select + 3 role assignments
+        # 2 models → triggers default select + 3 role assignments + env vars
         select_seq = [
             "OpenRouter",  # provider
             "done",  # done adding
@@ -447,6 +450,7 @@ class TestHelloCommand:
             None,  # fast role: skip
             None,  # smart role: skip
             None,  # reasoning role: skip
+            "done",  # env vars: done
             "coding",  # workspace profile
             "yolo",  # execution mode
             "exit",  # summary
@@ -462,7 +466,7 @@ class TestHelloCommand:
                 _mock_questionary_checkbox(stack, checkbox_seq)
                 result = runner.invoke(
                     cli,
-                    ["hello"],
+                    ["hello", "--cli"],
                     input="n\n\nn\n",
                 )
 
@@ -490,7 +494,7 @@ class TestSetupAlias:
                 _mock_questionary_checkbox(stack, STANDARD_CHECKBOX_SEQUENCE)
                 result = runner.invoke(
                     cli,
-                    ["setup"],
+                    ["setup", "--cli"],
                     input="n\n\nn\n",
                 )
 
@@ -518,7 +522,7 @@ class TestInitCommand:
                 result = runner.invoke(
                     cli,
                     ["init"],
-                    input="n\n\nn\n",
+                    input="n\n\nn\n",  # init calls run_hello_wizard() directly (no browser)
                 )
 
         assert result.exit_code == 0

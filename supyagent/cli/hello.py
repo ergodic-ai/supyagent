@@ -22,7 +22,7 @@ from rich.prompt import Confirm, Prompt
 from rich.rule import Rule
 from rich.table import Table
 
-from supyagent.core.config import get_config_manager
+from supyagent.core.config import KNOWN_LLM_KEYS, get_config_manager
 from supyagent.core.model_registry import get_model_registry
 from supyagent.core.service import (
     DEFAULT_SERVICE_URL,
@@ -37,6 +37,8 @@ from supyagent.core.workspace import (
     create_goals_file,
     initialize_workspace,
     is_workspace_initialized,
+    load_workspace,
+    read_goals,
 )
 from supyagent.default_agents import (
     AGENT_ROLES,
@@ -103,6 +105,7 @@ INTEGRATION_PROVIDERS = [
 WIZARD_STEPS = [
     "Connect to Services",
     "Set Up Models",
+    "Environment Variables",
     "Workspace Profile",
     "Define Goals",
     "Settings",
@@ -482,12 +485,51 @@ def _step_model_setup(statuses: dict[int, str], env_keys: dict[str, str]) -> str
 
         console.print()
 
-        if not Confirm.ask("  Add more models?", default=False):
+        action = questionary.select(
+            "Model options:",
+            choices=[
+                Choice("Add more models", value="add"),
+                Choice("Manage role assignments", value="roles"),
+                Choice("Done", value="done"),
+            ],
+            style=WIZARD_STYLE,
+        ).ask()
+
+        if action is None or action == "done":
             selected_model = default_model
             statuses[2] = "complete"
             if selected_model:
                 config_mgr.set("DEFAULT_MODEL", selected_model)
             return selected_model
+        elif action == "roles":
+            console.print()
+            console.print(
+                "  [grey62]Assign models to roles"
+                " (agents reference roles, not models):[/grey62]"
+            )
+            for role_name in ("fast", "smart", "reasoning"):
+                role_choices = [Choice(m, value=m) for m in registered]
+                role_choices.append(Choice("Skip", value=None))
+
+                current_role = roles.get(role_name)
+                choice = questionary.select(
+                    f"  {role_name} model:",
+                    choices=role_choices,
+                    default=current_role,
+                    style=WIZARD_STYLE,
+                ).ask()
+
+                if choice:
+                    registry.assign_role(role_name, choice)
+                    console.print(
+                        f"  [green]\u2713[/green] {role_name} = [cyan]{choice}[/cyan]"
+                    )
+
+            statuses[2] = "complete"
+            if default_model:
+                config_mgr.set("DEFAULT_MODEL", default_model)
+            return default_model
+
         console.print()
     else:
         console.print("  [bright_black]No models registered yet.[/bright_black]")
@@ -615,7 +657,81 @@ def _step_model_setup(statuses: dict[int, str], env_keys: dict[str, str]) -> str
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Workspace Profile (NEW — replaces "Create Agent")
+# Step 3: Environment Variables
+# ---------------------------------------------------------------------------
+
+
+def _step_environment_vars(statuses: dict[int, str]) -> None:
+    """
+    Step 3: Manage arbitrary environment variables (API keys, service tokens, etc.).
+
+    Shows currently stored variables and lets users add new ones.
+    """
+    statuses[3] = "active"
+    _step_header(3, "Environment Variables", statuses)
+
+    config_mgr = get_config_manager()
+
+    # Load all stored keys
+    stored_keys = config_mgr._load_keys()
+
+    # Show current env vars
+    if stored_keys:
+        table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+        table.add_column("Variable", width=28)
+        table.add_column("Description", width=30)
+        table.add_column("Status", width=10)
+        for key_name in sorted(stored_keys.keys()):
+            desc = KNOWN_LLM_KEYS.get(key_name, "Custom")
+            table.add_row(key_name, desc, "[green]set[/green]")
+        console.print(table)
+        console.print()
+    else:
+        console.print("  [bright_black]No environment variables configured yet.[/bright_black]")
+        console.print()
+
+    console.print(
+        "  [grey62]Add API keys or other environment variables your agents need.[/grey62]"
+    )
+    console.print()
+
+    # Add loop
+    while True:
+        action = questionary.select(
+            "Environment variables:",
+            choices=[
+                Choice("Add new variable", value="add"),
+                Choice("Done", value="done"),
+            ],
+            style=WIZARD_STYLE,
+        ).ask()
+
+        if action is None or action == "done":
+            break
+
+        # Prompt for key name
+        key_name = Prompt.ask("  Variable name (e.g. SERP_API_KEY)")
+        if not key_name:
+            continue
+        key_name = key_name.strip().upper()
+
+        # Prompt for value (hidden input)
+        value = getpass.getpass(f"  Value for {key_name}: ")
+        if not value:
+            console.print("  [yellow]No value provided, skipping.[/yellow]")
+            continue
+
+        config_mgr.set(key_name, value)
+        stored_keys[key_name] = value
+        desc = KNOWN_LLM_KEYS.get(key_name, "Custom")
+        console.print(f"  [green]\u2713[/green] Saved {key_name} ({desc})")
+        console.print()
+
+    statuses[3] = "complete"
+
+
+# ---------------------------------------------------------------------------
+# Step 4: Workspace Profile
 # ---------------------------------------------------------------------------
 
 
@@ -623,12 +739,12 @@ def _step_workspace_profile(
     statuses: dict[int, str], model: str | None
 ) -> tuple[str, list[str]]:
     """
-    Step 3: Choose workspace profile and install agents.
+    Step 4: Choose workspace profile and install agents.
 
     Returns (profile_name, list_of_installed_agent_names).
     """
-    statuses[3] = "active"
-    _step_header(3, "Workspace Profile", statuses)
+    statuses[4] = "active"
+    _step_header(4, "Workspace Profile", statuses)
 
     # Install default tools first
     tools_path = Path("powers")
@@ -747,23 +863,23 @@ def _step_workspace_profile(
             "  [grey62]Delegation: assistant \u2192 planner \u2192 coder, assistant \u2192 writer[/grey62]"
         )
 
-    statuses[3] = "complete"
+    statuses[4] = "complete"
     return profile, installed_names
 
 
 # ---------------------------------------------------------------------------
-# Step 4: Define Goals (NEW)
+# Step 5: Define Goals
 # ---------------------------------------------------------------------------
 
 
 def _step_define_goals(statuses: dict[int, str]) -> str:
     """
-    Step 4: Create GOALS.md with user-defined goals.
+    Step 5: Create GOALS.md with user-defined goals.
 
     Returns the goals text (may be empty).
     """
-    statuses[4] = "active"
-    _step_header(4, "Define Goals", statuses)
+    statuses[5] = "active"
+    _step_header(5, "Define Goals", statuses)
 
     console.print(
         "  [grey62]What do you want to achieve with this workspace?[/grey62]"
@@ -800,23 +916,23 @@ def _step_define_goals(statuses: dict[int, str]) -> str:
     else:
         console.print("  [green]\u2713[/green] Created GOALS.md (edit it anytime)")
 
-    statuses[4] = "complete"
+    statuses[5] = "complete"
     return goals_text
 
 
 # ---------------------------------------------------------------------------
-# Step 5: Settings (NEW)
+# Step 6: Settings
 # ---------------------------------------------------------------------------
 
 
 def _step_settings(statuses: dict[int, str]) -> tuple[str, bool, str]:
     """
-    Step 5: Configure execution mode and heartbeat.
+    Step 6: Configure execution mode and heartbeat.
 
     Returns (execution_mode, heartbeat_enabled, heartbeat_interval).
     """
-    statuses[5] = "active"
-    _step_header(5, "Settings", statuses)
+    statuses[6] = "active"
+    _step_header(6, "Settings", statuses)
 
     # Execution mode — interactive select
     execution_mode = questionary.select(
@@ -854,7 +970,7 @@ def _step_settings(statuses: dict[int, str]) -> tuple[str, bool, str]:
     else:
         console.print("  [bright_black]\u25cb Heartbeat disabled[/bright_black]")
 
-    statuses[5] = "complete"
+    statuses[6] = "complete"
     return execution_mode, heartbeat_enabled, heartbeat_interval
 
 
@@ -985,9 +1101,11 @@ def run_hello_wizard(quick: bool = False) -> None:
             "What would you like to do?",
             choices=[
                 Choice("Manage models", value="models"),
+                Choice("Manage environment variables", value="envs"),
                 Choice("Connect service", value="service"),
                 Choice("Change workspace profile", value="profile"),
                 Choice("Edit goals", value="goals"),
+                Choice("Settings", value="settings"),
                 Choice("Start over (full wizard)", value="restart"),
                 Choice("Exit", value="exit"),
             ],
@@ -997,16 +1115,67 @@ def run_hello_wizard(quick: bool = False) -> None:
         if action == "models":
             _step_model_setup(statuses, state.get("env_keys", {}))
             return
+        elif action == "envs":
+            _step_environment_vars(statuses)
+            return
         elif action == "service":
             _step_service_connection(statuses)
             return
         elif action == "profile":
             registry = get_model_registry()
             default_model = registry.get_default()
+            if state["agent_yamls"]:
+                ws_config = load_workspace()
+                console.print(
+                    f"\n  Current profile: [cyan]{ws_config.profile or 'coding'}[/cyan]"
+                )
+                console.print(
+                    f"  Agents: {', '.join(state['agent_yamls'])}"
+                )
+                console.print()
             _step_workspace_profile(statuses, default_model)
             return
         elif action == "goals":
+            existing_goals = read_goals()
+            if existing_goals.strip() and existing_goals.strip() != "- ":
+                console.print("\n  Current GOALS.md:")
+                for line in existing_goals.strip().splitlines()[:6]:
+                    console.print(f"    [grey62]{line}[/grey62]")
+                if len(existing_goals.strip().splitlines()) > 6:
+                    console.print("    [grey62]...[/grey62]")
+                console.print()
             _step_define_goals(statuses)
+            return
+        elif action == "settings":
+            ws_config = load_workspace()
+            console.print(f"\n  Current execution mode: [cyan]{ws_config.execution.mode}[/cyan]")
+            hb_label = (
+                f"every {ws_config.heartbeat.interval}"
+                if ws_config.heartbeat.enabled
+                else "disabled"
+            )
+            console.print(f"  Current heartbeat: [cyan]{hb_label}[/cyan]")
+            console.print()
+            execution_mode, heartbeat_enabled, heartbeat_interval = _step_settings(statuses)
+            from supyagent.core.workspace import (
+                ExecutionConfig,
+                HeartbeatConfig,
+                WorkspaceConfig,
+                save_workspace,
+            )
+            save_workspace(
+                WorkspaceConfig(
+                    name=ws_config.name,
+                    profile=ws_config.profile,
+                    execution=ExecutionConfig(mode=execution_mode),
+                    heartbeat=HeartbeatConfig(
+                        enabled=heartbeat_enabled,
+                        interval=heartbeat_interval,
+                    ),
+                    models=ws_config.models,
+                )
+            )
+            console.print("  [green]\u2713[/green] Settings saved")
             return
         elif action == "restart":
             pass  # Fall through to full wizard
@@ -1030,32 +1199,96 @@ def run_hello_wizard(quick: bool = False) -> None:
         console.print("\n  [grey62]Skipped model setup.[/grey62]")
         statuses[2] = "complete"
 
-    # Step 3: Workspace Profile
-    profile = "coding"
-    installed_agents: list[str] = []
+    # Step 3: Environment Variables
     try:
-        profile, installed_agents = _step_workspace_profile(statuses, model)
+        _step_environment_vars(statuses)
     except KeyboardInterrupt:
-        console.print("\n  [grey62]Skipped workspace profile.[/grey62]")
+        console.print("\n  [grey62]Skipped environment variables.[/grey62]")
         statuses[3] = "complete"
 
-    # Step 4: Define Goals
-    try:
-        _step_define_goals(statuses)
-    except KeyboardInterrupt:
-        console.print("\n  [grey62]Skipped goals.[/grey62]")
-        create_goals_file("")
-        statuses[4] = "complete"
+    # Step 4: Workspace Profile
+    profile = "coding"
+    installed_agents: list[str] = []
+    if state["agent_yamls"]:
+        installed_agents = state["agent_yamls"]
+        ws_config = load_workspace()
+        profile = ws_config.profile or "coding"
+        _step_header(4, "Workspace Profile", statuses)
+        console.print(f"  Agents already configured: {', '.join(installed_agents)}")
+        console.print(f"  Profile: {profile}")
+        console.print()
+        reconfigure = Confirm.ask("  Reconfigure workspace profile?", default=False)
+        if not reconfigure:
+            statuses[4] = "complete"
+        else:
+            try:
+                profile, installed_agents = _step_workspace_profile(statuses, model)
+            except KeyboardInterrupt:
+                console.print("\n  [grey62]Skipped workspace profile.[/grey62]")
+                statuses[4] = "complete"
+    else:
+        try:
+            profile, installed_agents = _step_workspace_profile(statuses, model)
+        except KeyboardInterrupt:
+            console.print("\n  [grey62]Skipped workspace profile.[/grey62]")
+            statuses[4] = "complete"
 
-    # Step 5: Settings
+    # Step 5: Define Goals
+    existing_goals = read_goals()
+    if existing_goals.strip() and existing_goals.strip() != "- ":
+        _step_header(5, "Define Goals", statuses)
+        console.print("  GOALS.md already exists:")
+        for line in existing_goals.strip().splitlines()[:6]:
+            console.print(f"    [grey62]{line}[/grey62]")
+        if len(existing_goals.strip().splitlines()) > 6:
+            console.print("    [grey62]...[/grey62]")
+        console.print()
+        reconfigure = Confirm.ask("  Edit goals?", default=False)
+        if not reconfigure:
+            statuses[5] = "complete"
+        else:
+            try:
+                _step_define_goals(statuses)
+            except KeyboardInterrupt:
+                console.print("\n  [grey62]Skipped goals.[/grey62]")
+                statuses[5] = "complete"
+    else:
+        try:
+            _step_define_goals(statuses)
+        except KeyboardInterrupt:
+            console.print("\n  [grey62]Skipped goals.[/grey62]")
+            create_goals_file("")
+            statuses[5] = "complete"
+
+    # Step 6: Settings
     execution_mode = "yolo"
     heartbeat_enabled = False
     heartbeat_interval = "5m"
-    try:
-        execution_mode, heartbeat_enabled, heartbeat_interval = _step_settings(statuses)
-    except KeyboardInterrupt:
-        console.print("\n  [grey62]Using defaults.[/grey62]")
-        statuses[5] = "complete"
+    if state["is_workspace"]:
+        ws_settings = load_workspace()
+        execution_mode = ws_settings.execution.mode
+        heartbeat_enabled = ws_settings.heartbeat.enabled
+        heartbeat_interval = ws_settings.heartbeat.interval
+        _step_header(6, "Settings", statuses)
+        console.print(f"  Execution mode: {execution_mode}")
+        hb_label = f"every {heartbeat_interval}" if heartbeat_enabled else "disabled"
+        console.print(f"  Heartbeat: {hb_label}")
+        console.print()
+        reconfigure = Confirm.ask("  Reconfigure settings?", default=False)
+        if not reconfigure:
+            statuses[6] = "complete"
+        else:
+            try:
+                execution_mode, heartbeat_enabled, heartbeat_interval = _step_settings(statuses)
+            except KeyboardInterrupt:
+                console.print("\n  [grey62]Using defaults.[/grey62]")
+                statuses[6] = "complete"
+    else:
+        try:
+            execution_mode, heartbeat_enabled, heartbeat_interval = _step_settings(statuses)
+        except KeyboardInterrupt:
+            console.print("\n  [grey62]Using defaults.[/grey62]")
+            statuses[6] = "complete"
 
     # Create workspace config (skip GOALS.md — step 4 already created it)
     from supyagent.core.workspace import (
