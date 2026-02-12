@@ -42,6 +42,8 @@ SERVICE_DISPLAY_NAMES: dict[str, str] = {
     "calendar": "Google Calendar",
     "drive": "Google Drive",
     "slides": "Google Slides",
+    "sheets": "Google Sheets",
+    "docs": "Google Docs",
     "mail": "Outlook Mail",
 }
 
@@ -301,6 +303,14 @@ def _placeholder_for_type(name: str, param_type: str, schema: dict) -> Any:
             return "Example"
         if "query" in n or n == "q":
             return "search term"
+        if n == "sql":
+            return "SELECT * FROM table_name LIMIT 10"
+        if n == "code":
+            return "print('Hello world')"
+        if n == "database":
+            return "my_database"
+        if n == "language":
+            return "python"
         if "cursor" in n or "token" in n or "page_token" in n:
             return "..."
         return "..."

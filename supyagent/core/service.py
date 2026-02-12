@@ -178,6 +178,10 @@ class ServiceClient:
                 defaults = metadata.get("bodyDefaults", {})
                 body = {**defaults, **remaining_args}
                 response = self._client.post(path, json=body)
+            elif method == "PUT":
+                defaults = metadata.get("bodyDefaults", {})
+                body = {**defaults, **remaining_args}
+                response = self._client.put(path, json=body)
             elif method == "PATCH":
                 response = self._client.patch(path, json=remaining_args)
             elif method == "DELETE":

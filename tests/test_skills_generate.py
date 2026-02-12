@@ -166,6 +166,8 @@ class TestSkillDisplayName:
         assert _skill_display_name("calendar") == "Google Calendar"
         assert _skill_display_name("drive") == "Google Drive"
         assert _skill_display_name("slides") == "Google Slides"
+        assert _skill_display_name("sheets") == "Google Sheets"
+        assert _skill_display_name("docs") == "Google Docs"
 
     def test_provider_display_name(self):
         assert _skill_display_name("slack") == "Slack"
@@ -250,6 +252,64 @@ class TestGenerateSkillFiles:
         assert "# Google Slides" in content
         assert "slides_get_presentation" in content
         assert "slides_get_page" in content
+
+    def test_sheets_produces_own_directory(self):
+        tools = [
+            _make_tool(
+                "sheets_get_spreadsheet", "Get spreadsheet metadata.", "google", service="sheets"
+            ),
+            _make_tool(
+                "sheets_update_values", "Write cell values.", "google", service="sheets"
+            ),
+            _make_tool(
+                "sheets_append_values", "Append rows.", "google", service="sheets"
+            ),
+        ]
+        files = generate_skill_files(tools)
+        assert "supy-cloud-sheets" in files
+        content = files["supy-cloud-sheets"]
+        assert "# Google Sheets" in content
+        assert "sheets_get_spreadsheet" in content
+        assert "sheets_update_values" in content
+        assert "sheets_append_values" in content
+
+    def test_docs_produces_own_directory(self):
+        tools = [
+            _make_tool(
+                "docs_get_document", "Get document structure.", "google", service="docs"
+            ),
+            _make_tool(
+                "docs_insert_text", "Insert text.", "google", service="docs"
+            ),
+            _make_tool(
+                "docs_batch_update", "Execute batch actions.", "google", service="docs"
+            ),
+        ]
+        files = generate_skill_files(tools)
+        assert "supy-cloud-docs" in files
+        content = files["supy-cloud-docs"]
+        assert "# Google Docs" in content
+        assert "docs_get_document" in content
+        assert "docs_insert_text" in content
+        assert "docs_batch_update" in content
+
+    def test_google_services_all_separate(self):
+        """All Google services (gmail, calendar, drive, slides, sheets, docs) get their own skill."""
+        tools = [
+            _make_tool("gmail_send", "Send email.", "google", service="gmail"),
+            _make_tool("calendar_list", "List events.", "google", service="calendar"),
+            _make_tool("drive_list", "List files.", "google", service="drive"),
+            _make_tool("slides_get", "Get presentation.", "google", service="slides"),
+            _make_tool("sheets_get", "Get spreadsheet.", "google", service="sheets"),
+            _make_tool("docs_get", "Get document.", "google", service="docs"),
+        ]
+        files = generate_skill_files(tools)
+        assert len(files) == 6
+        expected = {
+            "supy-cloud-gmail", "supy-cloud-calendar", "supy-cloud-drive",
+            "supy-cloud-slides", "supy-cloud-sheets", "supy-cloud-docs",
+        }
+        assert set(files.keys()) == expected
 
     def test_multiple_providers_sorted(self):
         tools = [

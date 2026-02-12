@@ -2049,7 +2049,7 @@ wheels = [
 
 [[package]]
 name = "supyagent"
-version = "0.5.10a0"
+version = "0.5.12"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
