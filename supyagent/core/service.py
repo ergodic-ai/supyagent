@@ -318,7 +318,7 @@ class ServiceClient:
     def health_check(self) -> bool:
         """Check if the service is reachable."""
         try:
-            response = self._client.get("/api/health")
+            response = self._client.get("/api/v1/health")
             return response.status_code == 200
         except httpx.RequestError:
             return False
