@@ -1,7 +1,7 @@
 [project]
 name = "supyagent"
-version = "0.5.12"
-description = "LLM agents powered by supypowers - build AI agents with tool use, multi-agent orchestration, and secure credential management"
+version = "0.6.0"
+description = "Cloud CLI for supyagent — connect AI agents to third-party services"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -9,16 +9,15 @@ authors = [
     { name = "Ergodic AI", email = "hello@ergodic.ai" }
 ]
 keywords = [
-    "llm",
-    "agent", 
     "ai",
-    "supypowers",
+    "agents",
+    "integrations",
+    "cloud",
+    "cli",
+    "gmail",
+    "slack",
+    "github",
     "tools",
-    "multi-agent",
-    "orchestration",
-    "chatbot",
-    "automation",
-    "litellm",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -35,49 +34,18 @@ classifiers = [
 ]
 
 dependencies = [
-    "litellm>=1.30.0",
-    "pydantic>=2.0",
-    "pyyaml>=6.0",
     "click>=8.0",
     "rich>=13.0",
     "cryptography>=41.0",
-    "tiktoken>=0.5.0",
     "httpx>=0.25.0",
-    "supypowers>=0.3.2",
-    "prompt_toolkit>=3.0",
-    "questionary>=2.0",
-    "fastapi>=0.110.0",
-    "uvicorn[standard]>=0.27.0",
 ]
 
 [project.optional-dependencies]
-browser = [
-    "httpx>=0.25.0",
-    "markdownify>=0.12.0",
-    "beautifulsoup4>=4.12.0",
-    "playwright>=1.40.0",
-    "playwright-stealth>=1.0.6",
-]
-web = [
-    "httpx>=0.25.0",
-    "markdownify>=0.12.0",
-    "beautifulsoup4>=4.12.0",
-]
-serve = [
-    "fastapi>=0.110.0",
-    "uvicorn[standard]>=0.27.0",
-]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.0",
     "ruff>=0.1.0",
-    "httpx>=0.25.0",
-    "markdownify>=0.12.0",
-    "beautifulsoup4>=4.12.0",
-    "playwright>=1.40.0",
-    "fastapi>=0.110.0",
-    "uvicorn[standard]>=0.27.0",
 ]
 
 [project.urls]

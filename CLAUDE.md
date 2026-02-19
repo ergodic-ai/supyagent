@@ -5,95 +5,65 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Development Commands
 
 ```bash
-# Install with dev dependencies (uses uv + hatchling)
+# Install with dev dependencies
 uv pip install -e ".[dev]"
-
-# Install with optional browser tools
-uv pip install -e ".[browser]"
 
 # Run all tests
 pytest
 
 # Run a single test file
-pytest tests/test_agent.py
-
-# Run a specific test
-pytest tests/test_agent.py::TestAgent::test_send_message -v
+pytest tests/test_service.py
 
 # Lint
 ruff check .
 
 # Lint with auto-fix
 ruff check . --fix
-
-# Format check (ruff handles both)
-ruff format --check .
 ```
 
 ## Architecture
 
-Supyagent is an LLM agent framework that uses [supypowers](https://github.com/ergodic-ai/supypowers) for tool execution and [LiteLLM](https://github.com/BerriAI/litellm) for multi-provider LLM access. Agents are defined in YAML files in `agents/` and tools are Python scripts in `powers/`.
+Supyagent is a cloud CLI that connects AI agents to third-party services (Gmail, Slack, GitHub, Calendar, etc.) via the supyagent service API. Users authenticate with `supyagent connect`, then use cloud tools from the CLI or generate skill files for AI coding assistants.
 
-### Core Loop
+### Source Files
 
-The `Agent` class (`supyagent/core/agent.py`) drives the central conversation loop:
-1. User message -> LLM call (via `LLMClient` wrapping LiteLLM)
-2. If LLM returns tool calls, execute them and feed results back
-3. Repeat until LLM returns a text-only response
+| File | Purpose |
+|------|---------|
+| `supyagent/cli/main.py` | CLI entry point — all commands (Click-based) |
+| `supyagent/cli/skills.py` | SKILL.md file generation for AI coding assistants |
+| `supyagent/core/config.py` | `ConfigManager` — Fernet-encrypted key storage in `~/.supyagent/config/` |
+| `supyagent/core/service.py` | `ServiceClient` — HTTP client for supyagent service API, device auth flow |
+| `supyagent/utils/binary.py` | Binary content materialization (PDFs, images from API responses) |
 
-Two execution modes:
-- **Interactive** (`Agent`): Stateful chat with session persistence, credential prompting, streaming
-- **Execution** (`ExecutionRunner` in `core/executor.py`): Stateless input->output pipeline for automation; no session storage, no credential prompting
+### CLI Commands
 
-### Tool System
+| Command | Purpose |
+|---------|---------|
+| `supyagent connect` | Device authorization flow to authenticate with the service |
+| `supyagent disconnect` | Remove stored credentials |
+| `supyagent status` | Show connection status and available tools |
+| `supyagent inbox` | View/manage webhook events from connected integrations |
+| `supyagent doctor` | Diagnose setup (connectivity, config, tools) |
+| `supyagent config set/list/delete/import/export` | Manage encrypted API keys |
+| `supyagent service tools` | List available cloud tools |
+| `supyagent service run <tool> '<json>'` | Execute a cloud tool directly |
+| `supyagent service inbox` | Detailed inbox management |
+| `supyagent skills generate` | Generate SKILL.md files for AI coding assistants |
 
-Tools are external Python scripts managed by supypowers. The flow:
-1. `discover_tools()` runs `supypowers docs --format json` to get available tools
-2. Tool definitions are converted to OpenAI function-calling format with `script__function` naming (double underscore)
-3. Tool execution runs `supypowers run script:function '{args}'` as a subprocess
-4. The `ProcessSupervisor` (`core/supervisor.py`) wraps execution with timeouts, auto-backgrounding, and lifecycle management
+### How It Works
 
-The supervisor runs on a persistent background thread with its own asyncio event loop. Sync callers use `run_supervisor_coroutine()` to bridge into it.
+1. `supyagent connect` runs a device auth flow against the supyagent service (`https://app.supyagent.com`)
+2. The API key is stored encrypted in `~/.supyagent/config/`
+3. `ServiceClient` uses the key to call `GET /api/v1/tools` (discovery) and execute tools via HTTP
+4. `skills generate` transforms discovered tools into SKILL.md files that Claude Code, Cursor, etc. can use
 
-Three special tool types are always injected (not from supypowers):
-- `request_credential` - lets the LLM ask the user for API keys
-- `delegate_to_<name>` / `spawn_agent` - multi-agent delegation tools
-- `list_processes` / `get_process_output` / `kill_process` - background process management
+### Dependencies
 
-### Multi-Agent Delegation
-
-Agents can delegate to other agents listed in their `delegates` config field. The `DelegationManager` (`core/delegation.py`) handles this:
-- **Subprocess mode** (default): Child runs via `supyagent exec <agent> --task "..."` with the `ProcessSupervisor`
-- **In-process mode**: Child `Agent` or `ExecutionRunner` instantiated directly
-
-The `AgentRegistry` (`core/registry.py`) tracks parent-child relationships and enforces a max delegation depth to prevent infinite loops. Registry state persists to `.supyagent/registry.json`.
-
-### Context Management
-
-The `ContextManager` (`core/context_manager.py`) handles long conversations:
-- Full message history always persists to disk (JSONL via `SessionManager`)
-- For LLM calls, it builds a trimmed message list: system prompt + optional summary + recent messages that fit in the context budget
-- Auto-summarization triggers when message count or token count exceeds configurable thresholds
-
-### Configuration Layers
-
-- **Agent configs**: YAML files in `agents/` parsed into `AgentConfig` (Pydantic model in `models/agent_config.py`)
-- **Global config** (API keys): Encrypted with Fernet, stored in `~/.supyagent/config/`, loaded into env vars at startup via `load_config()`
-- **Per-agent credentials**: Encrypted with Fernet, stored in `.supyagent/credentials/<agent>.enc`
-- **Sessions**: JSONL files in `.supyagent/sessions/<agent>/<session_id>.jsonl`
-
-### CLI
-
-Single entry point: `supyagent` (Click-based, `supyagent/cli/main.py`). Key commands: `init`, `new`, `chat`, `run`, `list`, `batch`, `plan`, `exec` (internal), `config`, `sessions`, `agents`, `cleanup`.
-
-### Default Tools
-
-Bundled in `supyagent/default_tools/` and copied to user's `powers/` dir on `supyagent init`. Includes: shell, files, edit, find, search, web, browser.
+Only 4 runtime dependencies: `click`, `rich`, `cryptography`, `httpx`.
 
 ## Key Conventions
 
 - Python 3.11+ required. Ruff for linting (line-length 100, rules: E, F, I, N, W; E501 ignored).
-- All models use Pydantic v2 (`models/` package).
-- Tests use pytest with `pytest-asyncio` (auto mode). Fixtures in `tests/conftest.py`. Tests mock LLM responses and supypowers calls rather than making real API calls.
-- Tool results follow `{"ok": bool, "data": ..., "error": ...}` convention throughout.
-- The `will_create_tools` flag on an agent config causes tool-creation instructions to be appended to its system prompt, enabling the agent to write new supypowers scripts at runtime.
+- Tests use pytest with `pytest-asyncio` (auto mode). Tests mock HTTP calls rather than making real API calls.
+- Tool results follow `{"ok": bool, "data": ..., "error": ...}` convention.
+- The full agent framework (LLM loop, supypowers, multi-agent delegation, sessions, memory) lives on the `dev` branch.

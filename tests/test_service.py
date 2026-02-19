@@ -256,7 +256,7 @@ class TestExecuteTool:
 
     def test_unsupported_method(self, mock_config_manager):
         client = ServiceClient(api_key="sk_test")
-        result = client.execute_tool("test", {}, {"method": "PUT", "path": "/test"})
+        result = client.execute_tool("test", {}, {"method": "OPTIONS", "path": "/test"})
         assert result["ok"] is False
         assert "Unsupported" in result["error"]
         client.close()
@@ -682,80 +682,3 @@ class TestCredentialHelpers:
     def test_get_service_client_when_not_connected(self, mock_config_manager):
         client = get_service_client()
         assert client is None
-
-
-# ---------------------------------------------------------------------------
-# ServiceConfig in AgentConfig
-# ---------------------------------------------------------------------------
-
-
-class TestServiceConfig:
-    def test_default_service_config(self):
-        from supyagent.models.agent_config import AgentConfig, ModelConfig
-
-        config = AgentConfig(
-            name="test",
-            model=ModelConfig(provider="anthropic/claude-3-5-sonnet-20241022"),
-            system_prompt="Test prompt",
-        )
-        assert config.service.enabled is True
-        assert config.service.url == "https://app.supyagent.com"
-
-    def test_service_disabled(self):
-        from supyagent.models.agent_config import AgentConfig, ModelConfig, ServiceConfig
-
-        config = AgentConfig(
-            name="test",
-            model=ModelConfig(provider="anthropic/claude-3-5-sonnet-20241022"),
-            system_prompt="Test prompt",
-            service=ServiceConfig(enabled=False),
-        )
-        assert config.service.enabled is False
-
-    def test_custom_service_url(self):
-        from supyagent.models.agent_config import AgentConfig, ModelConfig, ServiceConfig
-
-        config = AgentConfig(
-            name="test",
-            model=ModelConfig(provider="anthropic/claude-3-5-sonnet-20241022"),
-            system_prompt="Test prompt",
-            service=ServiceConfig(url="https://custom.example.com"),
-        )
-        assert config.service.url == "https://custom.example.com"
-
-    def test_service_config_from_yaml(self, tmp_path):
-        import yaml
-
-        from supyagent.models.agent_config import load_agent_config
-
-        agents_dir = tmp_path / "agents"
-        agents_dir.mkdir()
-        config_yaml = agents_dir / "test.yaml"
-        config_yaml.write_text(yaml.dump({
-            "name": "test",
-            "model": {"provider": "anthropic/claude-3-5-sonnet-20241022"},
-            "system_prompt": "Test prompt",
-            "service": {"enabled": False, "url": "https://custom.example.com"},
-        }))
-
-        config = load_agent_config("test", agents_dir)
-        assert config.service.enabled is False
-        assert config.service.url == "https://custom.example.com"
-
-    def test_service_config_absent_in_yaml_uses_defaults(self, tmp_path):
-        import yaml
-
-        from supyagent.models.agent_config import load_agent_config
-
-        agents_dir = tmp_path / "agents"
-        agents_dir.mkdir()
-        config_yaml = agents_dir / "test.yaml"
-        config_yaml.write_text(yaml.dump({
-            "name": "test",
-            "model": {"provider": "anthropic/claude-3-5-sonnet-20241022"},
-            "system_prompt": "Test prompt",
-        }))
-
-        config = load_agent_config("test", agents_dir)
-        assert config.service.enabled is True
-        assert config.service.url == "https://app.supyagent.com"
