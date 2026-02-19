@@ -4,352 +4,367 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-LLM agents powered by [supypowers](https://github.com/ergodic-ai/supypowers) tools.
+Give your AI agents 50+ cloud tools — Gmail, Slack, GitHub, Calendar, Drive, and more — with one CLI.
 
-## Features
-
-- 🤖 **Interactive & Execution Agents** - Chat interactively or run automated pipelines
-- 🔧 **Tool Integration** - Use any supypowers function as an agent tool
-- 🌐 **Any LLM Provider** - Via [LiteLLM](https://docs.litellm.ai/docs/) (OpenAI, Anthropic, Ollama, etc.)
-- 📝 **YAML Configuration** - Simple, declarative agent definitions
-- 🔄 **Session Persistence** - Conversations persist across sessions
-- 🔐 **Credential Management** - Secure storage for API keys and secrets
-- 🎭 **Multi-Agent Orchestration** - Agents can delegate tasks to other agents
-- 📦 **Batch Processing** - Process multiple inputs from JSONL/CSV files
-
-## Installation
+## Get Started in 60 Seconds
 
 ```bash
+# 1. Install
 pip install supyagent
+
+# 2. Connect your accounts (opens browser to authorize)
+supyagent connect
+
+# 3. Run a tool
+supyagent service run gmail_list_messages '{"maxResults": 5}'
 ```
 
-Or with [uv](https://github.com/astral-sh/uv):
+That's it. You just read your Gmail from the command line.
 
-```bash
-uv pip install supyagent
-```
+---
 
-## Quick Start
+## What Is Supyagent?
 
-```bash
-# Initialize supyagent (sets up default tools)
-supyagent init
+Supyagent connects AI agents and developer tools to third-party services through a unified CLI. You authenticate once on the [dashboard](https://app.supyagent.com), connect your integrations (Google, Slack, GitHub, etc.), and then call any tool from the terminal or from your agent framework.
 
-# Set up your API key (stored securely)
-supyagent config set ANTHROPIC_API_KEY
-
-# Create your first agent
-supyagent new myagent
-
-# Start chatting
-supyagent chat myagent
-```
-
-## Usage
-
-### Interactive Mode
-
-```bash
-# Create an interactive agent
-supyagent new researcher
-
-# Chat with it
-supyagent chat researcher
-
-# Resume a previous session
-supyagent chat researcher --session <session-id>
-
-# Start fresh
-supyagent chat researcher --new
-```
-
-### Execution Mode
-
-For automation and pipelines:
-
-```bash
-# Create an execution agent
-supyagent new summarizer --type execution
-
-# Run with inline input
-supyagent run summarizer "Summarize this text..."
-
-# Run with file input
-supyagent run summarizer --input document.txt
-
-# Get JSON output
-supyagent run summarizer --input doc.txt --output json
-
-# Pipe from stdin
-cat article.txt | supyagent run summarizer
-```
-
-### Batch Processing
-
-```bash
-# Process multiple inputs
-supyagent batch summarizer inputs.jsonl --output results.jsonl
-
-# From CSV
-supyagent batch summarizer data.csv --format csv
-```
-
-### Multi-Agent Orchestration
-
-```bash
-# Use the planning agent to orchestrate complex tasks
-supyagent plan "Build a Python library for data validation"
-
-# The planner will delegate to specialist agents (coder, writer, researcher)
-```
-
-## Configuration
-
-### Setting Up API Keys
-
-Supyagent securely stores your LLM API keys so you don't need to export them every time:
-
-```bash
-# Interactive setup (recommended)
-supyagent config set
-# Shows a menu of common providers to choose from
-
-# Set a specific key
-supyagent config set ANTHROPIC_API_KEY
-supyagent config set OPENAI_API_KEY
-
-# Import from a .env file
-supyagent config import .env
-
-# Import only specific keys
-supyagent config import .env --filter OPENAI
-
-# List configured keys
-supyagent config list
-
-# Export keys to backup
-supyagent config export backup.env
-
-# Delete a key
-supyagent config delete OPENAI_API_KEY
-```
-
-Keys are encrypted and stored in `~/.supyagent/config/`. They're automatically loaded when running any agent command.
-
-### Supported Providers
-
-Supyagent uses LiteLLM, supporting 100+ providers:
-
-```yaml
-model:
-  # OpenAI
-  provider: openai/gpt-4o
-  
-  # Anthropic
-  provider: anthropic/claude-3-5-sonnet-20241022
-  
-  # Ollama (local)
-  provider: ollama/llama3
-  
-  # Azure OpenAI
-  provider: azure/gpt-4
-  
-  # Google
-  provider: gemini/gemini-pro
-```
-
-## Agent Configuration
-
-Agents are defined in YAML files in the `agents/` directory:
-
-```yaml
-name: researcher
-description: An AI research assistant
-type: interactive  # or "execution"
-
-model:
-  provider: anthropic/claude-3-5-sonnet-20241022
-  temperature: 0.7
-  max_tokens: 4096
-
-system_prompt: |
-  You are a helpful research assistant...
-
-tools:
-  allow:
-    - "*"           # Allow all tools
-    # or be specific:
-    # - "web:*"     # All functions in web.py
-    # - "math:calc" # Specific function
-  deny:
-    - "dangerous:*" # Block specific tools
-
-# For multi-agent support
-delegates:
-  - coder
-  - writer
-```
+**Supported services:** Gmail, Google Calendar, Google Drive, Google Slides, Google Sheets, Google Docs, Slack, GitHub, Discord, Notion, Microsoft 365 (Outlook, Calendar, OneDrive), Twitter/X, LinkedIn, HubSpot, Telegram, WhatsApp, Calendly, Linear, Pipedrive, Resend, and more.
 
 ## CLI Reference
 
-### Core Commands
-
 | Command | Description |
 |---------|-------------|
-| `supyagent init` | Initialize project with default tools |
-| `supyagent new <name>` | Create a new agent |
-| `supyagent list` | List all agents |
-| `supyagent show <name>` | Show agent details |
-| `supyagent chat <name>` | Interactive chat session |
-| `supyagent run <name> <task>` | Execute agent (non-interactive) |
-| `supyagent batch <name> <file>` | Process multiple inputs |
-| `supyagent plan <task>` | Run task through planning agent |
+| `supyagent connect` | Authenticate with the service (device auth flow) |
+| `supyagent disconnect` | Remove stored credentials |
+| `supyagent status` | Show connection status and available tools |
+| `supyagent service tools` | List all available cloud tools |
+| `supyagent service run <tool> '<json>'` | Execute a cloud tool |
+| `supyagent inbox` | View and manage incoming webhook events |
+| `supyagent skills generate` | Generate skill files for AI coding assistants |
+| `supyagent config set/list/delete` | Manage encrypted API keys |
+| `supyagent doctor` | Diagnose your setup |
 
-### Session Commands
+---
 
-| Command | Description |
-|---------|-------------|
-| `supyagent sessions <name>` | List sessions for an agent |
-| `supyagent chat <name> --session <id>` | Resume a session |
-| `supyagent chat <name> --new` | Start a new session |
+## Using Tools
 
-### Agent Management
-
-| Command | Description |
-|---------|-------------|
-| `supyagent agents` | List active agent instances |
-| `supyagent cleanup` | Remove completed instances |
-
-### Config Commands
-
-| Command | Description |
-|---------|-------------|
-| `supyagent config set [KEY]` | Set an API key (interactive menu if no key specified) |
-| `supyagent config list` | List all configured keys |
-| `supyagent config import <file>` | Import keys from .env file |
-| `supyagent config export <file>` | Export keys to .env file |
-| `supyagent config delete <key>` | Delete a stored key |
-
-### In-Chat Commands
-
-While chatting, use these commands:
-
-| Command | Description |
-|---------|-------------|
-| `/help` | Show available commands |
-| `/tools` | List available tools |
-| `/history` | Show conversation history |
-| `/sessions` | List your sessions |
-| `/switch <id>` | Switch to another session |
-| `/new` | Start a new session |
-| `/save <title>` | Save session with title |
-| `/export <file>` | Export session to file |
-| `/model <name>` | Switch LLM model |
-| `/creds` | Manage stored credentials |
-| `/clear` | Clear conversation history |
-| `/quit` | Exit the chat |
-
-## Bundled Tools
-
-Running `supyagent init` installs these default tools:
-
-### Shell (`shell.py`)
-- `run_command` - Execute shell commands
-- `run_script` - Run multi-line bash scripts
-- `which` - Find executable paths
-- `get_env` - Get environment variables
-
-### Files (`files.py`)
-- `read_file` / `write_file` - File I/O
-- `list_directory` - List files with glob patterns
-- `copy_file` / `move_file` / `delete_file` - File operations
-- `create_directory` - Create directories
-- `file_info` - Get file metadata
-
-You can add your own tools by creating Python files in `powers/`.
-
-## Project Structure
-
-```
-your-project/
-├── agents/              # Agent YAML definitions
-│   ├── assistant.yaml
-│   ├── planner.yaml
-│   └── researcher.yaml
-├── powers/              # Tool definitions (Python)
-│   ├── shell.py         # Shell commands (bundled)
-│   ├── files.py         # File operations (bundled)
-│   └── my_tools.py      # Your custom tools
-└── .supyagent/          # Runtime data (gitignore this)
-    ├── sessions/        # Conversation history
-    ├── credentials/     # Encrypted secrets
-    └── registry.json    # Agent instances
-```
-
-## Credential Management
-
-Supyagent securely manages API keys and secrets:
+### List available tools
 
 ```bash
-# In chat, agents can request credentials
-🔑 Credential requested: SLACK_API_TOKEN
-   Purpose: To send messages to Slack
-Enter value (or press Enter to skip): ****
-Save for future sessions? [Y/n]: y
-
-# View stored credentials
-/creds
+supyagent service tools
 ```
 
-Credentials are encrypted at rest using Fernet encryption.
+Filter by provider:
 
-## Multi-Agent Architecture
-
-Create orchestrator agents that delegate to specialists:
-
-```yaml
-# agents/planner.yaml
-name: planner
-type: interactive
-
-delegates:
-  - researcher  # Can delegate research tasks
-  - coder       # Can delegate coding tasks
-  - writer      # Can delegate writing tasks
-
-system_prompt: |
-  You are a planning agent. Break down complex tasks
-  and delegate to specialist agents...
+```bash
+supyagent service tools --provider google
+supyagent service tools --provider slack
 ```
 
-The planner can then:
-1. Analyze tasks
-2. Create execution plans
-3. Delegate subtasks to appropriate agents
-4. Synthesize results
+### Run a tool
+
+```bash
+# Send a Slack message
+supyagent service run slack_send_message '{"channel": "#general", "text": "Hello from supyagent"}'
+
+# List calendar events
+supyagent service run calendar_list_events '{"maxResults": 10}'
+
+# Create a GitHub issue
+supyagent service run github_create_issue '{"owner": "myorg", "repo": "myrepo", "title": "Bug fix", "body": "Details here"}'
+```
+
+You can also use colon syntax (`gmail:list_messages`) or read args from a file:
+
+```bash
+echo '{"q": "from:boss@company.com"}' | supyagent service run gmail_list_messages --input -
+supyagent service run gmail_list_messages --input args.json
+```
+
+### Output format
+
+Every tool returns JSON to stdout:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "messages": [
+      {"id": "abc123", "from": "alice@example.com", "subject": "Hello", "snippet": "..."}
+    ]
+  }
+}
+```
+
+On error:
+
+```json
+{
+  "ok": false,
+  "error": "Permission denied for gmail_send_message: Forbidden"
+}
+```
+
+Status messages go to stderr, so the JSON output is always clean for piping.
+
+---
+
+## Generate Skill Files for AI Coding Assistants
+
+Supyagent can generate skill files that let AI coding assistants (Claude Code, Codex CLI, OpenCode, Cursor, Copilot, Windsurf) use your connected services directly.
+
+### Auto-detect and generate
+
+```bash
+supyagent skills generate
+```
+
+This detects AI tool folders (`.claude/`, `.codex/`, `.agents/`, `.cursor/`, `.copilot/`, `.windsurf/`) in the current directory and generates skill files in each.
+
+### Generate for a specific tool
+
+```bash
+# Write to a specific directory
+supyagent skills generate -o .claude/skills
+
+# Write to all detected folders without prompting
+supyagent skills generate --all
+
+# Preview to stdout
+supyagent skills generate --stdout
+```
+
+### What gets generated
+
+Each connected integration gets its own skill file. For example, if you have Google and Slack connected, you get:
+
+```
+.claude/skills/
+  supy-cloud-gmail/SKILL.md
+  supy-cloud-calendar/SKILL.md
+  supy-cloud-drive/SKILL.md
+  supy-cloud-slack/SKILL.md
+```
+
+Each SKILL.md contains YAML frontmatter and documentation for every tool in that integration:
+
+```markdown
+---
+name: supy-gmail
+description: >-
+  Use supyagent to interact with Gmail. Available actions: list emails
+  from gmail inbox, get a specific email by its message id, send an
+  email via gmail. Use when the user asks to interact with Gmail.
+---
+
+# Gmail
+
+Execute tools: `supyagent service run <tool_name> '<json>'`
+
+### gmail_list_messages
+
+List emails from Gmail inbox.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `maxResults` | integer | no | Number of messages to return |
+| `q` | string | no | Search query using Gmail syntax |
+
+​```bash
+supyagent service run gmail_list_messages '{"q": "from:boss@company.com", "maxResults": 10}'
+​```
+```
+
+After generating, your AI coding assistant will automatically use these tools when you ask it to interact with connected services.
+
+---
+
+## Integrate with Agent Frameworks
+
+Supyagent tools can be used from any agent framework. There are two integration paths:
+
+### Option A: JSON tool definitions (for LangChain, CrewAI, etc.)
+
+Export your tools as JSON:
+
+```bash
+supyagent service tools --json
+```
+
+This returns a list of tool definitions with parameter schemas:
+
+```json
+[
+  {
+    "name": "google:gmail_list_messages",
+    "description": "List emails from Gmail inbox.",
+    "provider": "google",
+    "service": "gmail",
+    "method": "GET",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "maxResults": {"type": "integer", "description": "Number of messages to return"},
+        "q": {"type": "string", "description": "Search query using Gmail syntax"}
+      }
+    }
+  }
+]
+```
+
+Convert these into OpenAI function-calling format for your framework:
+
+```python
+import json
+import subprocess
+
+# Get tool definitions
+result = subprocess.run(["supyagent", "service", "tools", "--json"], capture_output=True, text=True)
+tools = json.loads(result.stdout)
+
+# Convert to OpenAI function-calling format
+openai_tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": tool["name"].split(":")[-1],
+            "description": tool["description"],
+            "parameters": tool["parameters"],
+        },
+    }
+    for tool in tools
+]
+```
+
+### Option B: Execute tools via subprocess
+
+When the LLM calls a tool, execute it through supyagent:
+
+```python
+import json
+import subprocess
+
+def execute_supyagent_tool(tool_name: str, arguments: dict) -> dict:
+    """Execute a supyagent cloud tool and return the result."""
+    result = subprocess.run(
+        ["supyagent", "service", "run", tool_name, json.dumps(arguments)],
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+# Example: LLM decides to send an email
+result = execute_supyagent_tool("gmail_send_message", {
+    "to": "alice@example.com",
+    "subject": "Meeting notes",
+    "body": "Here are the notes from today...",
+})
+
+if result["ok"]:
+    print("Email sent:", result["data"])
+else:
+    print("Error:", result["error"])
+```
+
+### Full example: LangChain integration
+
+```python
+import json
+import subprocess
+from langchain_core.tools import StructuredTool
+
+# Load supyagent tools
+result = subprocess.run(["supyagent", "service", "tools", "--json"], capture_output=True, text=True)
+supyagent_tools = json.loads(result.stdout)
+
+def make_tool(tool_def):
+    """Create a LangChain tool from a supyagent tool definition."""
+    tool_name = tool_def["name"].split(":")[-1]
+
+    def run_tool(**kwargs):
+        result = subprocess.run(
+            ["supyagent", "service", "run", tool_name, json.dumps(kwargs)],
+            capture_output=True, text=True,
+        )
+        return result.stdout
+
+    return StructuredTool.from_function(
+        func=run_tool,
+        name=tool_name,
+        description=tool_def["description"],
+    )
+
+langchain_tools = [make_tool(t) for t in supyagent_tools]
+```
+
+---
+
+## Inbox
+
+View webhook events from connected integrations:
+
+```bash
+# List unread events
+supyagent inbox
+
+# Filter by provider
+supyagent inbox -p github
+
+# View a specific event
+supyagent inbox -i EVENT_ID
+
+# Archive an event
+supyagent inbox -a EVENT_ID
+
+# Archive all
+supyagent inbox --archive-all
+```
+
+---
+
+## Config Management
+
+Supyagent stores API keys encrypted in `~/.supyagent/config/`:
+
+```bash
+# Set a key interactively
+supyagent config set
+
+# Set a specific key
+supyagent config set OPENAI_API_KEY
+
+# List stored keys
+supyagent config list
+
+# Import from .env
+supyagent config import .env
+
+# Export to .env
+supyagent config export backup.env
+
+# Delete a key
+supyagent config delete MY_KEY
+```
+
+---
 
 ## Development
 
 ```bash
-# Clone the repo
 git clone https://github.com/ergodic-ai/supyagent
 cd supyagent
 
-# Install with dev dependencies
+# Install
 uv pip install -e ".[dev]"
 
-# Run tests
+# Test
 pytest
 
-# Run linting
+# Lint
 ruff check .
 ```
+
+Only 4 runtime dependencies: `click`, `rich`, `cryptography`, `httpx`.
 
 ## License
 
 MIT
-
-## Related Projects
-
-- [supypowers](https://github.com/ergodic-ai/supypowers) - Tool execution framework
-- [LiteLLM](https://github.com/BerriAI/litellm) - LLM provider abstraction
