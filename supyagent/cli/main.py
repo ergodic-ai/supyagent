@@ -18,7 +18,7 @@ try:
 
     _version = pkg_version("supyagent")
 except Exception:
-    _version = "0.6.0"
+    _version = "0.6.1"
 
 from supyagent.core.config import ConfigManager
 
