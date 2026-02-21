@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 PROVIDER_DISPLAY_NAMES: dict[str, str] = {
-    "google": "Google",
+    "google": "Google Workspace",
     "slack": "Slack",
     "github": "GitHub",
     "discord": "Discord",

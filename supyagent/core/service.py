@@ -71,7 +71,9 @@ class ServiceClient:
             response = self._client.get("/api/v1/tools")
             response.raise_for_status()
             data = response.json()
-            return data.get("tools", [])
+            # Response shape: {"ok": true, "data": {"tools": [...]}}
+            inner = data.get("data", data)
+            return inner.get("tools", [])
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
                 logger.warning(
@@ -101,7 +103,9 @@ class ServiceClient:
             response = self._client.get("/api/v1/integrations")
             response.raise_for_status()
             data = response.json()
-            return data.get("integrations", [])
+            # Response shape: {"ok": true, "data": {"integrations": [...]}}
+            inner = data.get("data", data)
+            return inner.get("integrations", [])
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
                 logger.warning(
