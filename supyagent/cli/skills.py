@@ -31,7 +31,7 @@ PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "platform-search": "Platform Services - Search",
     "platform-multimodal": "Platform Services - Multimodal",
     "platform-compute": "Platform Services - Compute & Data",
-    "platform-browser": "Platform Services - Browser",
+    "platform-web": "Web",
 }
 
 # Providers whose tools should be split by service rather than grouped together.
@@ -67,12 +67,12 @@ PROVIDER_DESCRIPTION_OVERRIDES: dict[str, str] = {
         "text to speech, generate an image from a prompt, create a video, or analyze "
         "and understand video content."
     ),
-    "platform-browser": (
-        "Use supyagent to visit web pages, scrape websites, take page snapshots, "
-        "search text on a page, and run an AI browser agent to interact with web pages. "
-        "Use when the user asks to visit a web page, scrape a website, browse a URL, "
-        "get page content, extract data from a website, or use a browser agent to "
-        "interact with web pages."
+    "platform-web": (
+        "Use supyagent to inspect web pages (get the full accessibility/aria tree), "
+        "read page content as markdown or HTML, search text on a page, and run an AI "
+        "web agent for complex multi-step interactions. Use when the user asks to look "
+        "at a web page, get page content, scrape a website, extract data from a URL, "
+        "or interact with a website."
     ),
     "platform-compute": (
         "Use supyagent to execute Python code in a sandbox, upload and host temporary files, "
@@ -221,7 +221,7 @@ def _skill_key(tool: dict) -> str:
         if service in ("platform_files", "platform_code", "platform_sqlite"):
             return "platform-compute"
         if service.startswith("platform_browser"):
-            return "platform-browser"
+            return "platform-web"
         return "platform-multimodal"
     return provider
 
