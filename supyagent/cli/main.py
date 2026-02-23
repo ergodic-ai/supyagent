@@ -1062,9 +1062,9 @@ def _format_relative_time(iso_str: str) -> str:
         return ""
 
 
-@service_group.command("run")
+@service_group.command("run", context_settings={"ignore_unknown_options": True})
 @click.argument("tool_spec")
-@click.argument("args_json", required=False, default="{}")
+@click.argument("extra_args", nargs=-1, type=click.UNPROCESSED)
 @click.option(
     "--input",
     "-i",
@@ -1072,29 +1072,44 @@ def _format_relative_time(iso_str: str) -> str:
     type=click.Path(),
     help="Read arguments from JSON file (use '-' for stdin)",
 )
-def service_run(tool_spec: str, args_json: str, input_file: str | None):
+@click.option(
+    "--timeout",
+    "-t",
+    type=float,
+    default=None,
+    help="Read timeout in seconds (default: 180)",
+)
+def service_run(
+    tool_spec: str,
+    extra_args: tuple[str, ...],
+    input_file: str | None,
+    timeout: float | None,
+):
     """
     Execute a service tool directly.
 
     TOOL_SPEC is the tool name (e.g., gmail_send_message or gmail:send_message).
-    ARGS_JSON is the JSON arguments (optional if using --input).
+    Pass arguments as JSON or as --key value flags.
 
     \b
     Examples:
+        supyagent service run image_generate --prompt "A red cube"
+        supyagent service run gmail_list_messages --max_results 5
         supyagent service run gmail_list_messages '{"max_results": 5}'
         supyagent service run slack:send_message '{"channel": "#general", "text": "Hello"}'
-        supyagent service run github_list_repos
         echo '{"query": "test"}' | supyagent service run gmail_search_messages --input -
     """
     from supyagent.core.service import get_service_client
 
-    client = get_service_client()
+    client = get_service_client(timeout=timeout)
     if not client:
         console.print("[yellow]Not connected to service.[/yellow]")
         console.print("Run [cyan]supyagent connect[/cyan] to authenticate.")
         sys.exit(1)
 
-    # Parse arguments
+    # Parse arguments from --input, JSON string, or --key value flags
+    args: dict[str, Any] = {}
+
     if input_file:
         if input_file == "-":
             raw = sys.stdin.read().strip()
@@ -1109,12 +1124,47 @@ def service_run(tool_spec: str, args_json: str, input_file: str | None):
         except json.JSONDecodeError as e:
             console.print(f"[red]Error:[/red] Invalid JSON in input: {e}")
             sys.exit(1)
-    else:
+
+    # Check if first extra arg is a JSON string (legacy positional usage)
+    remaining = list(extra_args)
+    if remaining and remaining[0].startswith("{"):
         try:
-            args = json.loads(args_json) if args_json else {}
+            args = {**args, **json.loads(remaining[0])}
+            remaining = remaining[1:]
         except json.JSONDecodeError as e:
             console.print(f"[red]Error:[/red] Invalid JSON arguments: {e}")
             sys.exit(1)
+
+    # Parse --key value pairs from remaining args
+    i = 0
+    while i < len(remaining):
+        token = remaining[i]
+        if token.startswith("--"):
+            key = token[2:].replace("-", "_")
+            if i + 1 < len(remaining) and not remaining[i + 1].startswith("--"):
+                value = remaining[i + 1]
+                # Auto-convert booleans and numbers
+                if value.lower() == "true":
+                    args[key] = True
+                elif value.lower() == "false":
+                    args[key] = False
+                else:
+                    try:
+                        args[key] = int(value)
+                    except ValueError:
+                        try:
+                            args[key] = float(value)
+                        except ValueError:
+                            args[key] = value
+                i += 2
+            else:
+                # Bare flag with no value → treat as boolean true
+                args[key] = True
+                i += 1
+        else:
+            console.print(f"[red]Error:[/red] Unexpected argument: {token}")
+            sys.exit(1)
+            i += 1
 
     # Normalize tool spec: support both "gmail:send_message" and "gmail_send_message"
     tool_name = tool_spec.replace(":", "_")

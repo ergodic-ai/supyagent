@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 SERVICE_API_KEY = "SUPYAGENT_SERVICE_API_KEY"
 SERVICE_URL = "SUPYAGENT_SERVICE_URL"
 DEFAULT_SERVICE_URL = "https://app.supyagent.com"
+DEFAULT_READ_TIMEOUT = 180.0  # 3 minutes — accommodates slow endpoints (image/video gen)
 
 
 class ServiceClient:
@@ -36,16 +37,18 @@ class ServiceClient:
         self,
         api_key: str | None = None,
         base_url: str | None = None,
+        timeout: float | None = None,
     ):
         config_mgr = get_config_manager()
         self.api_key = api_key or config_mgr.get(SERVICE_API_KEY)
         self.base_url = (
             base_url or config_mgr.get(SERVICE_URL) or DEFAULT_SERVICE_URL
         ).rstrip("/")
+        read_timeout = timeout if timeout is not None else DEFAULT_READ_TIMEOUT
         self._client = httpx.Client(
             base_url=self.base_url,
             headers=self._headers(),
-            timeout=30.0,
+            timeout=httpx.Timeout(30.0, read=read_timeout),
         )
 
     def _headers(self) -> dict[str, str]:
@@ -435,7 +438,7 @@ def clear_service_credentials() -> bool:
     return removed
 
 
-def get_service_client() -> ServiceClient | None:
+def get_service_client(timeout: float | None = None) -> ServiceClient | None:
     """
     Get a ServiceClient if service credentials exist.
 
@@ -445,4 +448,4 @@ def get_service_client() -> ServiceClient | None:
     api_key = config_mgr.get(SERVICE_API_KEY)
     if not api_key:
         return None
-    return ServiceClient(api_key=api_key)
+    return ServiceClient(api_key=api_key, timeout=timeout)
