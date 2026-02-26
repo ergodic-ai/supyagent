@@ -682,3 +682,54 @@ class TestCredentialHelpers:
     def test_get_service_client_when_not_connected(self, mock_config_manager):
         client = get_service_client()
         assert client is None
+
+
+# ---------------------------------------------------------------------------
+# ServiceClient.fetch_docs
+# ---------------------------------------------------------------------------
+
+
+class TestFetchDocs:
+    def _make_client(self, mock_config_manager, handler):
+        transport = httpx.MockTransport(handler)
+        client = ServiceClient(api_key="sk_test", base_url="https://test.local")
+        client._client = httpx.Client(
+            base_url="https://test.local",
+            transport=transport,
+            headers=client._headers(),
+        )
+        return client
+
+    def test_returns_markdown_on_success(self, mock_config_manager):
+        md = "---\nname: supyagent-skills\n---\n\n# Supyagent Skills\n"
+
+        client = self._make_client(
+            mock_config_manager,
+            lambda req: httpx.Response(
+                200, text=md, headers={"content-type": "text/markdown; charset=utf-8"}
+            ),
+        )
+        result = client.fetch_docs()
+        assert result == md
+        client.close()
+
+    def test_returns_none_without_api_key(self, mock_config_manager):
+        client = ServiceClient()
+        assert client.fetch_docs() is None
+        client.close()
+
+    def test_returns_none_on_401(self, mock_config_manager):
+        client = self._make_client(
+            mock_config_manager,
+            lambda req: httpx.Response(401, json={"error": "Invalid API key"}),
+        )
+        assert client.fetch_docs() is None
+        client.close()
+
+    def test_returns_none_on_network_error(self, mock_config_manager):
+        def raise_error(req):
+            raise httpx.ConnectError("Connection refused")
+
+        client = self._make_client(mock_config_manager, raise_error)
+        assert client.fetch_docs() is None
+        client.close()

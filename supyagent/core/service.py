@@ -322,6 +322,28 @@ class ServiceClient:
         except (httpx.HTTPStatusError, httpx.RequestError):
             return 0
 
+    def fetch_docs(self) -> str | None:
+        """Fetch combined API documentation markdown from the service."""
+        if not self.api_key:
+            return None
+
+        try:
+            response = self._client.get("/api/v1/skills")
+            response.raise_for_status()
+            return response.text
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                logger.warning(
+                    "Service API key is invalid or expired. "
+                    "Run 'supyagent connect' to reconnect."
+                )
+            else:
+                logger.warning(f"Failed to fetch docs: {e}")
+            return None
+        except httpx.RequestError as e:
+            logger.warning(f"Could not reach service at {self.base_url}: {e}")
+            return None
+
     def health_check(self) -> bool:
         """Check if the service is reachable."""
         try:

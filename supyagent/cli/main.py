@@ -758,18 +758,26 @@ def service_group():
     help="Filter tools by provider (e.g., google, slack, github)",
 )
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def service_tools(provider: str | None, as_json: bool):
+@click.option(
+    "--info",
+    "-i",
+    "info_tool",
+    default=None,
+    help="Show detailed info for a specific tool",
+)
+def service_tools(provider: str | None, as_json: bool, info_tool: str | None):
     """
     List available service tools.
 
     Shows all tools from connected integrations. Use --provider to filter
-    by a specific provider.
+    by a specific provider. Use --info to view detailed info about a tool.
 
     \b
     Examples:
         supyagent service tools
         supyagent service tools --provider google
         supyagent service tools --json
+        supyagent service tools --info gmail_list_messages
     """
     from supyagent.core.service import get_service_client
 
@@ -786,6 +794,87 @@ def service_tools(provider: str | None, as_json: bool):
         console.print(
             "[dim]No tools available. Connect integrations on the dashboard.[/dim]"
         )
+        return
+
+    # --info: show detailed info for a specific tool
+    if info_tool:
+        tool_name = info_tool.replace(":", "_")
+        matched_tool = None
+        for tool in tools:
+            func = tool.get("function", {})
+            if func.get("name") == tool_name:
+                matched_tool = tool
+                break
+        if not matched_tool:
+            # Try suffix matching
+            for tool in tools:
+                func = tool.get("function", {})
+                name = func.get("name", "")
+                if name.endswith(f"_{tool_name}"):
+                    matched_tool = tool
+                    break
+
+        if not matched_tool:
+            console.print(f"[red]Error:[/red] Tool '{info_tool}' not found.")
+            available = [t.get("function", {}).get("name", "") for t in tools]
+            suggestions = [n for n in available if tool_name.split("_")[0] in n]
+            if suggestions:
+                console.print("\n[dim]Did you mean:[/dim]")
+                for s in suggestions[:5]:
+                    console.print(f"  - {s}")
+            sys.exit(1)
+
+        func = matched_tool.get("function", {})
+        meta = matched_tool.get("metadata", {})
+        fname = func.get("name", "?")
+        desc = func.get("description", "No description")
+        method = meta.get("method", "?")
+        path = meta.get("path", "?")
+        prov = meta.get("provider", "?")
+        svc = meta.get("service", "?")
+
+        console.print(
+            Panel(
+                f"[bold]{fname}[/bold]\n\n{desc}",
+                title="Tool Info",
+                border_style="cyan",
+            )
+        )
+        console.print(f"  [dim]Provider:[/dim]  {prov}")
+        console.print(f"  [dim]Service:[/dim]   {svc}")
+        console.print(f"  [dim]Method:[/dim]    {method}")
+        console.print(f"  [dim]Path:[/dim]      {path}")
+
+        # Parameters table
+        params = func.get("parameters", {})
+        properties = params.get("properties", {})
+        required_params = set(params.get("required", []))
+
+        if properties:
+            console.print()
+            ptable = Table(title="Parameters")
+            ptable.add_column("Name", style="cyan")
+            ptable.add_column("Type", style="dim")
+            ptable.add_column("Required")
+            ptable.add_column("Description")
+
+            for pname, pschema in properties.items():
+                ptype = pschema.get("type", "string")
+                req = "yes" if pname in required_params else ""
+                pdesc = pschema.get("description", "")
+                if len(pdesc) > 50:
+                    pdesc = pdesc[:47] + "..."
+                ptable.add_row(pname, ptype, req, pdesc)
+
+            console.print(ptable)
+
+        # Example command
+        console.print()
+        example_args = []
+        for pname in list(properties.keys())[:2]:
+            example_args.append(f"--{pname} <value>")
+        args_str = " ".join(example_args) if example_args else "'{}'"
+        console.print(f"[dim]Example:[/dim]  supyagent service run {fname} {args_str}")
         return
 
     # Filter by provider if specified
@@ -1339,6 +1428,169 @@ def skills_generate(output: str | None, stdout: bool, select_all: bool):
         "[dim]Your AI coding assistant will automatically use these skills when you ask "
         "about connected services.[/dim]"
     )
+
+
+# =============================================================================
+# Docs Commands
+# =============================================================================
+
+# Provider name aliases — maps user input to display names in the docs
+_PROVIDER_ALIASES: dict[str, list[str]] = {
+    "google": ["google workspace"],
+    "microsoft": ["microsoft 365"],
+    "twitter": ["twitter/x"],
+    "search": ["data sources"],
+    "browser": ["web"],
+    "platform": ["advanced tools"],
+}
+
+
+def _match_provider_section(header: str, query: str) -> bool:
+    """Check if a section header matches a provider query (case-insensitive)."""
+    h = header.lower().strip()
+    q = query.lower().strip()
+
+    # Exact match
+    if h == q:
+        return True
+
+    # Header starts with query
+    if h.startswith(q):
+        return True
+
+    # Check aliases
+    for alias_key, targets in _PROVIDER_ALIASES.items():
+        if q == alias_key or q in targets:
+            for target in targets:
+                if h == target or h.startswith(target):
+                    return True
+            if q == alias_key and h.startswith(alias_key):
+                return True
+
+    return False
+
+
+def _parse_doc_sections(markdown: str) -> list[tuple[str, str]]:
+    """
+    Parse combined docs markdown into (header, content) sections.
+
+    Splits on ``---`` separators followed by ``# HeaderName`` lines.
+    Returns list of (header_text, section_content) tuples.
+    """
+    sections: list[tuple[str, str]] = []
+    # Split on horizontal rule separators
+    parts = markdown.split("\n---\n")
+
+    for part in parts:
+        lines = part.strip().split("\n")
+        header = ""
+        for line in lines:
+            if line.startswith("# ") and not line.startswith("# Supyagent"):
+                header = line[2:].strip()
+                break
+        if header:
+            sections.append((header, part.strip()))
+
+    return sections
+
+
+@cli.command("docs")
+@click.argument("provider", required=False, default=None)
+@click.option("--list", "list_providers", is_flag=True, help="List available doc sections")
+@click.option("--raw", is_flag=True, help="Output raw markdown (for piping)")
+@click.option("--json", "as_json", is_flag=True, help="List providers with capabilities as JSON")
+def docs_cmd(provider: str | None, list_providers: bool, raw: bool, as_json: bool):
+    """
+    View API documentation for connected integrations.
+
+    Fetches docs from the service and displays them in the terminal.
+    Optionally filter by provider name.
+
+    \b
+    Examples:
+        supyagent docs                  # Show all API docs (paged)
+        supyagent docs google           # Show docs for Google Workspace
+        supyagent docs --list           # List providers with docs
+        supyagent docs --raw            # Output raw markdown (for piping)
+        supyagent docs google --raw     # Raw markdown for one provider
+        supyagent docs --json           # List providers as JSON
+    """
+    from rich.markdown import Markdown
+
+    from supyagent.core.service import get_service_client
+
+    client = get_service_client()
+    if not client:
+        console.print("[yellow]Not connected to service.[/yellow]")
+        console.print("Run [cyan]supyagent connect[/cyan] to authenticate.")
+        sys.exit(1)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console_err,
+    ) as progress:
+        progress.add_task("Fetching docs...", total=None)
+        markdown = client.fetch_docs()
+    client.close()
+
+    if not markdown:
+        console.print("[red]Error:[/red] Could not fetch documentation.")
+        console.print("Check your connection with [cyan]supyagent status[/cyan].")
+        sys.exit(1)
+
+    sections = _parse_doc_sections(markdown)
+
+    # --json: list providers with doc sections
+    if as_json:
+        output = [{"name": header} for header, _ in sections]
+        click.echo(json.dumps(output, indent=2))
+        return
+
+    # --list: show providers as a table
+    if list_providers:
+        if not sections:
+            console.print("[dim]No provider documentation available.[/dim]")
+            return
+
+        table = Table(title="Available Documentation")
+        table.add_column("#", style="dim", width=4)
+        table.add_column("Provider", style="cyan")
+
+        for i, (header, _) in enumerate(sections, 1):
+            table.add_row(str(i), header)
+
+        console.print(table)
+        console.print("\n[dim]View docs: supyagent docs <provider>[/dim]")
+        return
+
+    # Filter by provider
+    if provider:
+        matched = [
+            (h, content) for h, content in sections if _match_provider_section(h, provider)
+        ]
+        if not matched:
+            console.print(f"[red]Error:[/red] No docs found for '{provider}'.")
+            if sections:
+                console.print("\n[dim]Available providers:[/dim]")
+                for header, _ in sections:
+                    console.print(f"  - {header}")
+            sys.exit(1)
+
+        filtered_md = "\n\n---\n\n".join(content for _, content in matched)
+
+        if raw:
+            click.echo(filtered_md)
+        else:
+            console.print(Markdown(filtered_md))
+        return
+
+    # Full docs
+    if raw:
+        click.echo(markdown)
+    else:
+        with console.pager(styles=True):
+            console.print(Markdown(markdown))
 
 
 if __name__ == "__main__":

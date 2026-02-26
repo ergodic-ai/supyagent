@@ -27,6 +27,7 @@ PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "whatsapp": "WhatsApp",
     "twilio": "Twilio",
     "resend": "Resend",
+    "supymail": "Supymail",
     "inbox": "AI Inbox",
     "platform-search": "Platform Services - Search",
     "platform-multimodal": "Platform Services - Multimodal",
