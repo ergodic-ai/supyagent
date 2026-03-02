@@ -322,6 +322,43 @@ class ServiceClient:
         except (httpx.HTTPStatusError, httpx.RequestError):
             return 0
 
+    # ------------------------------------------------------------------
+    # Jobs
+    # ------------------------------------------------------------------
+
+    def list_jobs(
+        self,
+        service: str | None = None,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """List async jobs (image gen, video gen, STT, TTS, code execution)."""
+        params: dict[str, Any] = {"limit": limit}
+        if service:
+            params["service"] = service
+        if status:
+            params["status"] = status
+
+        try:
+            response = self._client.get("/api/v1/jobs", params=params)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            return {"jobs": [], "total": 0, "error": str(e)}
+        except httpx.RequestError as e:
+            return {"jobs": [], "total": 0, "error": str(e)}
+
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
+        """Get a single async job by ID."""
+        try:
+            response = self._client.get(f"/api/v1/jobs/{job_id}")
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError:
+            return None
+        except httpx.RequestError:
+            return None
+
     def fetch_docs(self) -> str | None:
         """Fetch combined API documentation markdown from the service."""
         if not self.api_key:

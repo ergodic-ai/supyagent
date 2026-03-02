@@ -1126,6 +1126,146 @@ def service_inbox_archive(
             sys.exit(1)
 
 
+@service_group.command("jobs")
+@click.option(
+    "--service",
+    "-s",
+    default=None,
+    help="Filter by service (e.g. image_generate, video_generate, stt_transcribe)",
+)
+@click.option(
+    "--status",
+    default=None,
+    help="Filter by status (pending, processing, completed, failed)",
+)
+@click.option("--limit", "-l", default=20, type=int, help="Max jobs to show")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def service_jobs(service: str | None, status: str | None, limit: int, as_json: bool):
+    """
+    List async jobs (image gen, video gen, STT, TTS, code execution).
+
+    Shows recent jobs and their statuses.
+
+    \b
+    Examples:
+        supyagent service jobs                           # List recent jobs
+        supyagent service jobs --status completed        # Completed only
+        supyagent service jobs --service image_generate  # Image gen jobs only
+        supyagent service jobs --json                    # Machine-readable output
+    """
+    from supyagent.core.service import get_service_client
+
+    client = get_service_client()
+    if not client:
+        console.print("[yellow]Not connected to service.[/yellow]")
+        console.print("Run [cyan]supyagent connect[/cyan] to authenticate.")
+        sys.exit(1)
+
+    data = client.list_jobs(service=service, status=status, limit=limit)
+    client.close()
+
+    jobs = data.get("jobs", [])
+    total = data.get("total", 0)
+
+    if data.get("error"):
+        console.print(f"[red]Error:[/red] {data['error']}")
+        sys.exit(1)
+
+    if as_json:
+        click.echo(json.dumps(data, indent=2))
+        return
+
+    if not jobs:
+        console.print("[grey62]No jobs found.[/grey62]")
+        return
+
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+    table.add_column("Status", width=12)
+    table.add_column("Service", style="cyan", width=16)
+    table.add_column("Action", width=16)
+    table.add_column("ID", style="bright_black", width=20)
+    table.add_column("Time", style="bright_black", justify="right", width=10)
+
+    for job in jobs:
+        st = job.get("status", "?")
+        st_style = {
+            "pending": "[yellow]pending[/yellow]",
+            "processing": "[blue]processing[/blue]",
+            "completed": "[green]completed[/green]",
+            "failed": "[red]failed[/red]",
+        }.get(st, st)
+        svc = job.get("service", "?")
+        action = job.get("action", "?")
+        job_id = job.get("id", "?")
+        if len(job_id) > 20:
+            job_id = job_id[:17] + "..."
+        created = job.get("created_at", "")
+        time_str = _format_relative_time(created) if created else ""
+
+        table.add_row(st_style, svc, action, job_id, time_str)
+
+    console.print(table)
+    console.print(f"\n[grey62]{total} total job{'s' if total != 1 else ''}[/grey62]")
+
+
+@service_group.command("jobs:get")
+@click.argument("job_id")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def service_jobs_get(job_id: str, as_json: bool):
+    """
+    View a single job with its full details and result.
+
+    \b
+    Examples:
+        supyagent service jobs:get <job-id>
+        supyagent service jobs:get <job-id> --json
+    """
+    from supyagent.core.service import get_service_client
+
+    client = get_service_client()
+    if not client:
+        console.print("[yellow]Not connected to service.[/yellow]")
+        console.print("Run [cyan]supyagent connect[/cyan] to authenticate.")
+        sys.exit(1)
+
+    job = client.get_job(job_id)
+    client.close()
+
+    if not job:
+        console.print(f"[red]Error:[/red] Job not found: {job_id}")
+        sys.exit(1)
+
+    if as_json:
+        click.echo(json.dumps(job, indent=2))
+        return
+
+    st = job.get("status", "?")
+    st_style = {
+        "pending": "[yellow]pending[/yellow]",
+        "processing": "[blue]processing[/blue]",
+        "completed": "[green]completed[/green]",
+        "failed": "[red]failed[/red]",
+    }.get(st, st)
+
+    console.print(f"[bold]{job.get('service', '?')} / {job.get('action', '?')}[/bold]")
+    console.print()
+    console.print(f"  ID:       [bright_black]{job.get('id', '?')}[/bright_black]")
+    console.print(f"  Status:   {st_style}")
+    console.print(f"  Service:  [cyan]{job.get('service', '?')}[/cyan]")
+    console.print(f"  Action:   {job.get('action', '?')}")
+    console.print(f"  Created:  {job.get('created_at', '?')}")
+    if job.get("completed_at"):
+        console.print(f"  Completed: {job['completed_at']}")
+    if job.get("error"):
+        console.print(f"  Error:    [red]{job['error']}[/red]")
+    console.print()
+    result = job.get("result")
+    if result:
+        console.print("[bold]Result:[/bold]")
+        result_str = json.dumps(result, indent=2)
+        console.print(f"[grey62]{result_str}[/grey62]")
+
+
 def _format_relative_time(iso_str: str) -> str:
     """Format an ISO timestamp as a relative time string."""
     from datetime import datetime, timezone
