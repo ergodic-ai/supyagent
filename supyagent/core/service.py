@@ -225,6 +225,15 @@ class ServiceClient:
                 }
             elif status == 429:
                 return {"ok": False, "error": f"Rate limit exceeded: {error_msg}"}
+            elif status == 502:
+                return {
+                    "ok": False,
+                    "error": (
+                        f"Upstream provider error for {name}: {error_msg}. "
+                        "The integration token may have expired — "
+                        "try reconnecting at https://app.supyagent.com/integrations"
+                    ),
+                }
             else:
                 return {"ok": False, "error": f"Service error ({status}): {error_msg}"}
 
@@ -238,12 +247,29 @@ class ServiceClient:
         """Save a binary HTTP response to ~/.supyagent/tmp/ and return the path."""
         import hashlib
         import mimetypes
+        import re
 
-        ext = mimetypes.guess_extension(content_type.split(";")[0].strip()) or ".bin"
-        digest = hashlib.sha256(response.content).hexdigest()[:12]
         tmp_dir = Path.home() / ".supyagent" / "tmp"
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        file_path = tmp_dir / f"{digest}{ext}"
+
+        # Try to extract filename from Content-Disposition header
+        disposition = response.headers.get("content-disposition", "")
+        filename = None
+        if disposition:
+            match = re.search(r'filename="?([^";\n]+)"?', disposition)
+            if match:
+                filename = match.group(1).strip()
+
+        if filename:
+            # Use the real filename, prefixed with a short hash to avoid collisions
+            digest = hashlib.sha256(response.content).hexdigest()[:8]
+            file_path = tmp_dir / f"{digest}_{filename}"
+        else:
+            # Fall back to hash-based name
+            ext = mimetypes.guess_extension(content_type.split(";")[0].strip()) or ".bin"
+            digest = hashlib.sha256(response.content).hexdigest()[:12]
+            file_path = tmp_dir / f"{digest}{ext}"
+
         file_path.write_bytes(response.content)
         return {
             "ok": True,
